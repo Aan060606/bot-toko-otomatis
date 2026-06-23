@@ -15,6 +15,7 @@ function showAdminMenu(ctx, edit = false) {
     [Markup.button.callback("📦 Manajemen Produk", "admin_products")],
     [Markup.button.callback("📥 Tambah Stok", "admin_stocks")],
     [Markup.button.callback("📢 Broadcast", "admin_broadcast")],
+    [Markup.button.callback("🖼 Ubah Header Menu", "admin_header")],
     [Markup.button.callback("📊 Lihat Pesanan", "admin_orders")],
   ]);
   
@@ -37,6 +38,7 @@ function showAdminProducts(ctx) {
   
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback("➕ Tambah Produk", "admin_add_product")],
+    [Markup.button.callback("✏️ Kelola Produk (Edit/Hapus)", "admin_manage_product")],
     [Markup.button.callback("🔙 Kembali", "admin_main")],
   ]);
   return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });

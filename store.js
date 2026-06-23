@@ -5,6 +5,18 @@ function getActiveProducts() {
   return db.prepare("SELECT * FROM products WHERE active = 1").all();
 }
 
+// Ensure settings table exists
+db.prepare("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)").run();
+
+function getSetting(key, def = null) {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  return row ? row.value : def;
+}
+
+function setSetting(key, value) {
+  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+}
+
 function addToCart(userId, productId) {
   const existing = db.prepare("SELECT * FROM carts WHERE user_id = ? AND product_id = ?").get(userId, productId);
   if (existing) {
@@ -58,19 +70,18 @@ function fulfillOrder(orderId) {
   const deliveredStocks = [];
   
   const fulfillItem = db.prepare("UPDATE order_items SET fulfilled = 1 WHERE id = ?");
-  const getStock = db.prepare("SELECT * FROM stocks WHERE product_id = ? AND status = 'AVAILABLE' LIMIT 1");
-  const useStock = db.prepare("UPDATE stocks SET status = 'SOLD' WHERE id = ?");
   
   const transaction = db.transaction(() => {
     for (const item of items) {
       for(let i=0; i<item.quantity; i++) {
-        const stock = getStock.get(item.product_id);
+        const stock = db.prepare("SELECT * FROM stocks WHERE product_id = ? LIMIT 1").get(item.product_id);
         if (stock) {
-          useStock.run(stock.id);
           deliveredStocks.push({
             product_id: item.product_id,
             content: stock.content
           });
+          // Fitur Unlimited Stok: Jangan hapus stok agar link bisa dipakai berkali-kali!
+          // db.prepare("DELETE FROM stocks WHERE id = ?").run(stock.id);
         } else {
           // No stock available, admin needs to fulfill manually or it's a static link
           // We assume for static link VIP, we can just insert a static stock with 'AVAILABLE' and NOT mark it as SOLD
@@ -94,6 +105,10 @@ function fulfillOrder(orderId) {
   return deliveredStocks;
 }
 
+function getOrder(orderId) {
+  return db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId);
+}
+
 module.exports = {
   getActiveProducts,
   addToCart,
@@ -102,5 +117,8 @@ module.exports = {
   getCartTotal,
   removeCartItem,
   createOrder,
-  fulfillOrder
+  fulfillOrder,
+  getSetting,
+  setSetting,
+  getOrder
 };

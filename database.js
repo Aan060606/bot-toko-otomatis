@@ -20,6 +20,7 @@ function initDatabase() {
       description TEXT,
       price INTEGER NOT NULL,
       type TEXT NOT NULL, -- 'AUTO' or 'MANUAL'
+      preview_url TEXT,
       active INTEGER DEFAULT 1
     );
 

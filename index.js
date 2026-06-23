@@ -101,7 +101,10 @@ async function createDonation(amount, email, name, message) {
   return withRetry(async () => {
     const payload = { agree: true, notUnderage: true, message: message || "-", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: name, email, phone: "" } };
     const res = await curlPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
-    if (!res?.data?.qr_string) throw new Error("createDonation: respons tidak valid");
+    if (!res?.data?.qr_string) {
+      logger.error("Saweria Response (createDonation):", JSON.stringify(res));
+      throw new Error("createDonation: respons tidak valid");
+    }
     return res.data;
   });
 }
@@ -130,6 +133,22 @@ function stopPolling(donationId) {
   }
 }
 
+async function sendPhotoCurl(chatId, photoPath, caption) {
+  const { execFile } = require("child_process");
+  return new Promise((resolve, reject) => {
+    execFile("curl", [
+      "-s", "-X", "POST", `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`,
+      "-F", `chat_id=${chatId}`,
+      "-F", `photo=@${photoPath}`,
+      "-F", `caption=${caption}`,
+      "-F", `parse_mode=Markdown`
+    ], (err, stdout) => {
+      if (err) return reject(err);
+      resolve(stdout);
+    });
+  });
+}
+
 async function notifyAdmin(text) {
   if (!ADMIN_CHAT_ID) return;
   try { await bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }); } catch (e) {}
@@ -146,10 +165,17 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
       deliveryText += `${i+1}. Produk ID: \`${d.product_id}\`\n   Isi: ${d.content}\n\n`;
     });
 
-    await ctx.telegram.editMessageText(chatId, msgId, null, deliveryText, {
-      parse_mode: "Markdown",
-      ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main")]])
-    });
+    try {
+      await ctx.telegram.editMessageText(chatId, msgId, null, deliveryText, {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main")]])
+      });
+    } catch (err) {
+      await ctx.telegram.sendMessage(chatId, deliveryText, {
+        parse_mode: "Markdown",
+        ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main")]])
+      });
+    }
 
     await notifyAdmin(`💳 *PESANAN SELESAI*\n\nOrder ID: \`${orderId}\`\nRef: \`${donationId}\``);
   } catch (e) {
@@ -220,8 +246,91 @@ bot.action("admin_add_product", async (ctx) => {
   await ctx.reply("📝 Masukkan *Nama Produk*:");
 });
 
-bot.on('text', async (ctx, next) => {
+bot.action("admin_manage_product", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_manage_product_id';
+  await ctx.answerCbQuery();
+  await ctx.reply("✏️ Kirimkan *ID Produk* yang ingin diedit atau dihapus:", {parse_mode: "Markdown"});
+});
+
+bot.action("admin_header", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_set_header';
+  await ctx.answerCbQuery();
+  await ctx.reply("🖼 *Ubah Header Menu*\n\nKirimkan langsung sebuah Foto, file GIF, atau Link URL gambar ke chat ini:", {parse_mode: "Markdown"});
+});
+
+bot.on('message', async (ctx, next) => {
   const session = ctx.session || {};
+  if (!session.step) return next();
+
+  if (session.step === 'admin_set_header') {
+    if (ctx.message.photo) {
+      const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+      store.setSetting("header_type", "photo");
+      store.setSetting("header_file_id", fileId);
+    } else if (ctx.message.animation) {
+      store.setSetting("header_type", "animation");
+      store.setSetting("header_file_id", ctx.message.animation.file_id);
+    } else if (ctx.message.text && ctx.message.text.startsWith("http")) {
+      store.setSetting("header_type", "url");
+      store.setSetting("header_file_id", ctx.message.text);
+    } else {
+      return ctx.reply("❌ Harus berupa Foto, GIF, atau Link URL (http...). Coba kirim lagi:");
+    }
+    ctx.session = {};
+    return ctx.reply("✅ Header menu berhasil diperbarui! Cek dengan mengetik /start");
+  }
+
+  if (!ctx.message.text) return ctx.reply("❌ Harap kirimkan teks yang sesuai.");
+
+  if (session.step === 'admin_manage_product_id') {
+    const prodId = ctx.message.text.trim();
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(prodId);
+    if (!product) return ctx.reply("❌ Produk tidak ditemukan! Coba lagi:");
+    
+    session.manageProductId = prodId;
+    ctx.session.step = null;
+    
+    return ctx.reply(`⚙️ *Kelola Produk*\nNama: ${product.name}\nHarga: Rp${product.price}\n\nPilih aksi di bawah ini:`, {
+      parse_mode: "Markdown",
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback("Ubah Nama", "edit_prod_name"), Markup.button.callback("Ubah Harga", "edit_prod_price")],
+        [Markup.button.callback("Ubah Cuplikan", "edit_prod_preview"), Markup.button.callback("Ubah Isi/Link VIP", "edit_prod_content")],
+        [Markup.button.callback("🗑 Hapus Produk", "edit_prod_delete")],
+      ])
+    });
+  }
+
+  if (session.step === 'admin_edit_prod_name') {
+    db.prepare("UPDATE products SET name = ? WHERE id = ?").run(ctx.message.text, session.manageProductId);
+    ctx.session = {};
+    return ctx.reply("✅ Nama produk berhasil diubah!");
+  }
+  if (session.step === 'admin_edit_prod_price') {
+    const price = parseInt(ctx.message.text);
+    if (isNaN(price)) return ctx.reply("❌ Harus berupa angka!");
+    db.prepare("UPDATE products SET price = ? WHERE id = ?").run(price, session.manageProductId);
+    ctx.session = {};
+    return ctx.reply("✅ Harga produk berhasil diubah!");
+  }
+  if (session.step === 'admin_edit_prod_preview') {
+    let preview = ctx.message.text.trim();
+    if (preview.toUpperCase() === 'SKIP' || preview.toUpperCase() === 'HAPUS') preview = null;
+    db.prepare("UPDATE products SET preview_url = ? WHERE id = ?").run(preview, session.manageProductId);
+    ctx.session = {};
+    return ctx.reply("✅ Link cuplikan produk berhasil diubah!");
+  }
+  if (session.step === 'admin_edit_prod_content') {
+    const newContent = ctx.message.text;
+    db.prepare("DELETE FROM stocks WHERE product_id = ?").run(session.manageProductId);
+    db.prepare("INSERT INTO stocks (product_id, content) VALUES (?, ?)").run(session.manageProductId, newContent);
+    ctx.session = {};
+    return ctx.reply("✅ Isi konten/Link VIP berhasil diperbarui! Pembeli berikutnya akan menerima link baru ini.");
+  }
+
   if (session.step === 'admin_add_product_name') {
     session.newProductName = ctx.message.text;
     session.step = 'admin_add_product_price';
@@ -231,6 +340,13 @@ bot.on('text', async (ctx, next) => {
     const price = parseInt(ctx.message.text);
     if (isNaN(price)) return ctx.reply("Harus berupa angka!");
     session.newProductPrice = price;
+    session.step = 'admin_add_product_preview';
+    return ctx.reply("👀 Masukkan *Link Cuplikan* produk ini (misal: link telegra.ph, link gambar, dll).\nAtau ketik *SKIP* jika tidak ada cuplikan:");
+  }
+  if (session.step === 'admin_add_product_preview') {
+    let preview = ctx.message.text.trim();
+    if (preview.toUpperCase() === 'SKIP') preview = null;
+    session.newProductPreview = preview;
     session.step = 'admin_add_product_type';
     return ctx.reply("🛒 Tipe Produk: AUTO atau MANUAL?\n(AUTO = Kirim langsung jika ada stok, MANUAL = Perlu konfirmasi admin)", Markup.inlineKeyboard([
       [Markup.button.callback("AUTO", "set_type_auto"), Markup.button.callback("MANUAL", "set_type_manual")]
@@ -256,12 +372,34 @@ bot.on('text', async (ctx, next) => {
 
 bot.action(/set_type_(auto|manual)/, async (ctx) => {
   const type = ctx.match[1].toUpperCase();
-  const session = ctx.session;
+  const session = ctx.session || {};
   const id = "PROD-" + Date.now();
-  db.prepare("INSERT INTO products (id, name, price, type) VALUES (?, ?, ?, ?)").run(id, session.newProductName, session.newProductPrice, type);
+  db.prepare("INSERT INTO products (id, name, price, type, preview_url) VALUES (?, ?, ?, ?, ?)").run(id, session.newProductName || "Tanpa Nama", session.newProductPrice || 0, type, session.newProductPreview || null);
   ctx.session = {};
   await ctx.answerCbQuery();
   await ctx.reply(`✅ Produk berhasil ditambahkan!\n\nID: \`${id}\`\nNama: ${session.newProductName}\nHarga: ${session.newProductPrice}\nTipe: ${type}`, {parse_mode: "Markdown"});
+});
+
+bot.action(/edit_prod_(name|price|preview|content|delete)/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const action = ctx.match[1];
+  const prodId = ctx.session.manageProductId;
+  if (!prodId) return ctx.reply("❌ Sesi telah habis. Ulangi dari menu Kelola Produk.");
+  
+  if (action === 'delete') {
+    db.prepare("DELETE FROM products WHERE id = ?").run(prodId);
+    db.prepare("DELETE FROM stocks WHERE product_id = ?").run(prodId);
+    ctx.session = {};
+    await ctx.answerCbQuery("Produk Dihapus!");
+    return ctx.reply("🗑 Produk beserta stoknya berhasil dihapus secara permanen.");
+  }
+  
+  ctx.session.step = `admin_edit_prod_${action}`;
+  await ctx.answerCbQuery();
+  if (action === 'name') return ctx.reply("📝 Masukkan *Nama Produk* yang baru:", {parse_mode: "Markdown"});
+  if (action === 'price') return ctx.reply("💰 Masukkan *Harga Produk* yang baru (hanya angka):", {parse_mode: "Markdown"});
+  if (action === 'preview') return ctx.reply("👀 Masukkan *Link Cuplikan* yang baru, atau ketik *HAPUS* untuk menghilangkan cuplikan:", {parse_mode: "Markdown"});
+  if (action === 'content') return ctx.reply("🔗 Kirimkan *Isi Konten / Link VIP* yang baru.\nIni akan menggantikan konten lama yang dikirimkan ke pembeli:", {parse_mode: "Markdown"});
 });
 
 bot.action("admin_stocks", async (ctx) => {
@@ -280,101 +418,98 @@ bot.start(async (ctx) => {
 
 bot.action("menu_main", async (ctx) => {
   await ctx.answerCbQuery();
-  return showStoreMenu(ctx, true);
+  try { await ctx.deleteMessage(); } catch(e) {}
+  return showStoreMenu(ctx);
 });
 
-function showStoreMenu(ctx, edit = false) {
-  const text = `🏪 *Selamat Datang di Toko Otomatis 24/7*\n\nSilakan pilih menu:`;
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback("🛍 Belanja Produk", "store_products")],
-    [Markup.button.callback("🛒 Lihat Keranjang", "store_cart")],
-  ]);
-  if (edit) return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
-  return ctx.replyWithMarkdown(text, keyboard);
-}
-
-bot.action("store_products", async (ctx) => {
-  await ctx.answerCbQuery();
+function showStoreMenu(ctx) {
   const products = store.getActiveProducts();
-  let text = `🛍 *Katalog Produk*\n\nPilih produk untuk ditambah ke keranjang:\n\n`;
+  const text = `⛩️ 𝐉-𝐒𝐔𝐁 𝐂𝐎𝐋𝐋𝐄𝐂𝐓𝐈𝐎𝐍 𝐎𝐟𝐟𝐢𝐜𝐢𝐚𝐥 𝐇𝐮𝐛 ⛩️\n「 プレミアムアクセス • 𝑷𝒓𝒆𝒎𝒊𝒖𝒎 𝑨𝒄𝒄𝒆𝒔𝒔 」\n\nSilakan pilih lisensi VIP Anda di bawah ini ⚜️:\n\n_24/7 ON SIAP MELAYANI_`;
   const buttons = [];
   products.forEach(p => {
-    text += `- *${p.name}* (${formatRupiah(p.price)})\n`;
-    buttons.push([Markup.button.callback(`➕ ${p.name}`, `add_cart_${p.id}`)]);
+    if (p.preview_url) {
+      buttons.push([Markup.button.url(`📺 Preview Content ${p.name}`, p.preview_url)]);
+    }
+    buttons.push([Markup.button.callback(`🛒 Beli ${p.name} - ${formatRupiah(p.price)}`, `buy_now_${p.id}`)]);
   });
-  buttons.push([Markup.button.callback("🔙 Kembali", "menu_main")]);
   
-  await ctx.editMessageText(text, { parse_mode: "Markdown", ...Markup.inlineKeyboard(buttons) });
-});
-
-bot.action(/^add_cart_(.+)$/, async (ctx) => {
-  const productId = ctx.match[1];
-  store.addToCart(ctx.from.id, productId);
-  await ctx.answerCbQuery("✅ Berhasil ditambahkan ke keranjang!");
-});
-
-bot.action("store_cart", async (ctx) => {
-  await ctx.answerCbQuery();
-  const items = store.getCart(ctx.from.id);
-  if (items.length === 0) {
-    return ctx.editMessageText("🛒 Keranjang belanja Anda kosong.", Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "menu_main")]]));
+  if (process.env.ADMIN_CHAT_ID) {
+    buttons.push([Markup.button.url("👨‍💻 HUBUNGI ADMIN JIKA GANGGUAN", `tg://user?id=${process.env.ADMIN_CHAT_ID}`)]);
   }
   
-  let text = `🛒 *Keranjang Belanja*\n\n`;
-  items.forEach(item => {
-    text += `- ${item.name} (x${item.quantity}) - ${formatRupiah(item.price * item.quantity)}\n`;
-  });
-  text += `\n💰 *Total: ${formatRupiah(store.getCartTotal(ctx.from.id))}*`;
+  const keyboard = Markup.inlineKeyboard(buttons);
+  const hType = store.getSetting("header_type", "url");
+  const hFile = store.getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
   
-  await ctx.editMessageText(text, { parse_mode: "Markdown", ...Markup.inlineKeyboard([
-    [Markup.button.callback("💳 Checkout Sekarang", "store_checkout")],
-    [Markup.button.callback("🗑 Kosongkan Keranjang", "store_clear_cart")],
-    [Markup.button.callback("🔙 Kembali", "menu_main")]
-  ])});
-});
+  if (hType === "photo") {
+    return ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+  } else if (hType === "animation") {
+    return ctx.replyWithAnimation(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+  } else {
+    if (hFile.match(/\.(jpeg|jpg|png)$/i)) {
+      return ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+    }
+    return ctx.replyWithAnimation(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+  }
+}
 
-bot.action("store_clear_cart", async (ctx) => {
-  store.clearCart(ctx.from.id);
-  await ctx.answerCbQuery("🗑 Keranjang dikosongkan.");
-  return showStoreMenu(ctx, true);
-});
-
-bot.action("store_checkout", async (ctx) => {
+bot.action(/^buy_now_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
+  const productId = ctx.match[1];
   const userId = ctx.from.id;
+  
+  // Clean cart and add this single item
+  store.clearCart(userId);
+  store.addToCart(userId, productId);
+  
   const items = store.getCart(userId);
-  if (items.length === 0) return ctx.reply("Keranjang kosong!");
+  if (items.length === 0) return ctx.reply("❌ Produk tidak tersedia!");
 
   const amount = store.getCartTotal(userId);
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
     const calc = await calculateAmount(amount);
-    const donation = await createDonation(amount, "pembeli@bot.com", ctx.from.first_name || "Pembeli", "Checkout Toko");
-    
+    const buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
+    const donation = await createDonation(amount, "pembeli@bot.com", buyerName, "Beli " + productId);
     const orderId = store.createOrder(donation.id, userId, calc.amount_to_pay, items);
     store.clearCart(userId);
 
     const qrPath = await generateQRImage(donation.qr_string, donation.id);
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
     
-    await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
-    await ctx.replyWithPhoto({ source: qrPath }, {
-      caption: `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Total Bayar: ${formatRupiah(calc.amount_to_pay)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`,
-      parse_mode: "Markdown"
-    });
+    const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Total Bayar: ${formatRupiah(calc.amount_to_pay)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
+    await sendPhotoCurl(ctx.chat.id, qrPath, caption);
 
     const statusMsg = await ctx.replyWithMarkdown(`⏳ *Menunggu Pembayaran...*\nSistem akan memproses pesanan otomatis setelah pembayaran sukses.`);
     
     activeIntervals[donation.id] = pollPaymentStatus(ctx, donation.id, ctx.chat.id, statusMsg.message_id, orderId);
-
   } catch (err) {
     logger.error("Checkout error:", err.message);
-    await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, "❌ Gagal menyiapkan pembayaran. Coba lagi nanti.");
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
+    await ctx.reply("❌ Gagal menyiapkan pembayaran. Coba lagi nanti.");
   }
 });
 
 bot.catch((err, ctx) => {
   logger.error(`bot.catch:`, err.message);
+});
+
+// ADMIN: Simulate Payment without money
+bot.command("testpay", async (ctx) => {
+  if (!ADMIN_CHAT_ID || ctx.from.id.toString() !== ADMIN_CHAT_ID.toString()) {
+    return ctx.reply(`❌ Akses ditolak! Perintah ini hanya untuk Admin utama.\nID Anda saat ini: \`${ctx.from.id}\`\nSedangkan ID Admin di .env: \`${ADMIN_CHAT_ID}\``, { parse_mode: "Markdown" });
+  }
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) return ctx.reply("Format: `/testpay <ORDER_ID>`\nContoh: `/testpay ORD-12345`", { parse_mode: "Markdown" });
+  
+  const orderId = args[1];
+  const order = store.getOrder(orderId);
+  if (!order) return ctx.reply("❌ Order ID tidak ditemukan di database.");
+  if (order.status === "PAID") return ctx.reply("⚠️ Order ini sudah berstatus PAID (Lunas).");
+
+  await ctx.reply("🔄 Memalsukan pembayaran sukses untuk " + orderId + "...");
+  await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
 });
 
 bot.launch().then(() => logger.success("Bot Toko Otomatis berjalan!"));
