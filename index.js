@@ -211,6 +211,16 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
     }
 
     await notifyAdmin(`💳 *PESANAN SELESAI*\n\nOrder ID: \`${orderId}\`\nRef: \`${donationId}\``);
+    
+    // Update User CRM Stats
+    const order = await Order.findById(orderId).lean();
+    if (order) {
+      await User.findByIdAndUpdate(chatId, {
+        $inc: { purchase_count: 1, total_spent: order.total_amount }
+      });
+      await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
+    }
+
   } catch (e) {
     logger.error(e);
   }
@@ -242,21 +252,218 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
 }
 
 // User Registration Middleware
+// Utility untuk melacak event / behavior user
+async function trackEvent(userId, eventType, productId = null, metadata = {}) {
+  try {
+    await UserEvent.create({
+      user_id: userId,
+      event_type: eventType,
+      product_id: productId,
+      metadata
+    });
+  } catch (err) {
+    logger.error("Gagal melacak event:", err.message);
+  }
+}
+
 bot.use(async (ctx, next) => {
   if (ctx.from) {
-    const user = await User.findById(ctx.from.id).lean();
-    if (!user) {
-      await User.create({
-        _id: ctx.from.id,
-        first_name: ctx.from.first_name || '',
-        username: ctx.from.username || ''
-      });
+    const updateData = {
+      first_name: ctx.from.first_name || '',
+      username: ctx.from.username || '',
+      last_active_at: new Date()
+    };
+    
+    // Jika lewat link referral/start payload
+    if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start ')) {
+      const payload = ctx.message.text.split(' ')[1];
+      updateData.$setOnInsert = { source_ref: payload };
     }
+
+    await User.findByIdAndUpdate(
+      ctx.from.id,
+      { $set: updateData },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
   }
   return next();
 });
 
-// Admin Command
+// Broadcast Engine
+async function runBroadcast(adminCtx, queryFilter, segmentName, messageText) {
+  const users = await User.find({ ...queryFilter, is_blocked: false }).select('_id').lean();
+  if (users.length === 0) {
+    return adminCtx.reply(`❌ Tidak ada target user untuk segmen: ${segmentName}`);
+  }
+
+  const statusMsg = await adminCtx.reply(`⏳ Memulai broadcast ke ${users.length} user (${segmentName})...\n\nMohon tunggu, proses mengirim 1 pesan per detik...`);
+  
+  const log = await BroadcastLog.create({
+    admin_id: adminCtx.from.id,
+    target_segment: segmentName,
+    message_text: messageText,
+    status: 'SENDING'
+  });
+
+  let success = 0;
+  let failed = 0;
+
+  // Proses secara asinkron agar tidak memblokir bot
+  (async () => {
+    for (const u of users) {
+      try {
+        await bot.telegram.sendMessage(u._id, messageText, { parse_mode: 'Markdown' });
+        success++;
+      } catch (err) {
+        failed++;
+        // Handle blocked bot
+        if (err.description && err.description.includes('bot was blocked by the user')) {
+          await User.findByIdAndUpdate(u._id, { is_blocked: true });
+        }
+      }
+      // Delay 1 detik untuk menghindari rate limit Telegram (Anti-Spam)
+      await new Promise(res => setTimeout(res, 1000));
+    }
+
+    log.status = 'COMPLETED';
+    log.success_count = success;
+    log.failed_count = failed;
+    await log.save();
+
+    await bot.telegram.sendMessage(
+      adminCtx.from.id, 
+      `✅ *Broadcast Selesai!*\n\nSegmen: ${segmentName}\nSukses: ${success}\nGagal/Blocked: ${failed}`,
+      { parse_mode: 'Markdown' }
+    );
+  })();
+}
+
+// Admin Commands
+bot.command("broadcast_buyer", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const msg = ctx.message.text.replace('/broadcast_buyer', '').trim();
+  if (!msg) return ctx.reply("Format salah. Gunakan: /broadcast_buyer <pesan>");
+  await runBroadcast(ctx, { purchase_count: { $gt: 0 } }, 'BUYERS', msg);
+});
+
+bot.command("broadcast_nonbuyer", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const msg = ctx.message.text.replace('/broadcast_nonbuyer', '').trim();
+  if (!msg) return ctx.reply("Format salah. Gunakan: /broadcast_nonbuyer <pesan>");
+  await runBroadcast(ctx, { purchase_count: 0 }, 'NON_BUYERS', msg);
+});
+
+bot.command("broadcast_all", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const msg = ctx.message.text.replace('/broadcast_all', '').trim();
+  if (!msg) return ctx.reply("Format salah. Gunakan: /broadcast_all <pesan>");
+  await runBroadcast(ctx, {}, 'ALL', msg);
+});
+
+bot.command("broadcast_product", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const args = ctx.message.text.replace('/broadcast_product', '').trim().split(' ');
+  const productId = args[0];
+  const msg = args.slice(1).join(' ');
+  
+  if (!productId || !msg) {
+    return ctx.reply("Format salah. Gunakan: /broadcast_product <product_id> <pesan>");
+  }
+  
+  // Cari user yang pernah beli produk ini dengan mengecek Order
+  const { Order } = require('./database');
+  const orders = await Order.find({ status: 'SUCCESS' }).lean();
+  
+  const userIds = new Set();
+  for (const order of orders) {
+    const { OrderItem } = require('./database');
+    const items = await OrderItem.find({ order_id: order._id, product_id: productId }).lean();
+    if (items.length > 0) {
+      userIds.add(order.user_id);
+    }
+  }
+  
+  const usersToBroadcast = Array.from(userIds);
+  if (usersToBroadcast.length === 0) {
+    return ctx.reply(`❌ Belum ada user yang membeli produk ID: ${productId}`);
+  }
+  
+  // Hack the runBroadcast by passing a query that matches these users
+  await runBroadcast(ctx, { _id: { $in: usersToBroadcast } }, `BUYERS_${productId}`, msg);
+});
+
+bot.command("stats", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  return admin.showAdminCrmStats(ctx);
+});
+
+bot.command("user", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const targetId = ctx.message.text.replace('/user', '').trim();
+  if (!targetId) return ctx.reply("Format salah. Gunakan: /user <user_id>");
+  
+  const targetUser = await User.findById(targetId).lean();
+  if (!targetUser) return ctx.reply("❌ User tidak ditemukan di database.");
+  
+  const text = `👤 *Data Pelanggan*\n\n` +
+               `ID: \`${targetUser._id}\`\n` +
+               `Nama: ${targetUser.first_name}\n` +
+               `Username: ${targetUser.username}\n` +
+               `Status: ${targetUser.purchase_count > 0 ? '✅ Sudah Beli' : '❌ Belum Beli'}\n` +
+               `Total Belanja: Rp ${targetUser.total_spent.toLocaleString('id-ID')}\n` +
+               `Jml Transaksi: ${targetUser.purchase_count}\n` +
+               `Tgl Join: ${targetUser.joined_at ? new Date(targetUser.joined_at).toLocaleString() : '-'}\n` +
+               `Tgl Aktif: ${targetUser.last_active_at ? new Date(targetUser.last_active_at).toLocaleString() : '-'}\n` +
+               `Diblokir: ${targetUser.is_blocked ? 'Ya' : 'Tidak'}`;
+               
+  ctx.reply(text, { parse_mode: 'Markdown' });
+});
+
+bot.command("discount_list", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const discounts = await Discount.find().lean();
+  if (discounts.length === 0) return ctx.reply("Belum ada diskon yang dibuat.");
+  
+  let text = `🎟️ *Daftar Diskon Otomatis*\n\n`;
+  discounts.forEach(d => {
+    text += `🔹 *${d.code}* [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
+    text += `Tipe: ${d.type} (${d.value}${d.type === 'PERCENTAGE' ? '%' : ' IDR'})\n`;
+    text += `Trigger: ${d.trigger_event || 'ALL'}\n`;
+    text += `Terpakai: ${d.used_count} / ${d.max_uses > 0 ? d.max_uses : 'Unlimited'}\n\n`;
+  });
+  
+  ctx.reply(text, { parse_mode: 'Markdown' });
+});
+
+bot.command("creatediscount", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const args = ctx.message.text.replace('/creatediscount', '').trim().split(' ');
+  if (args.length < 4) {
+    return ctx.reply("Format: /creatediscount <KODE> <FIXED/PERCENTAGE> <NILAI> <TRIGGER>\n\nContoh:\n/creatediscount PENGGUNA_BARU FIXED 5000 FIRST_TIME\n/creatediscount LOYAL PERCENTAGE 10 LOYALTY\n/creatediscount COMEBACK FIXED 10000 CART_ABANDON");
+  }
+  
+  const [code, type, valueStr, trigger_event] = args;
+  const value = parseInt(valueStr);
+  
+  await Discount.create({
+    code,
+    type: type.toUpperCase(),
+    value,
+    trigger_event: trigger_event.toUpperCase()
+  });
+  
+  ctx.reply(`✅ Diskon otomatis *${code}* berhasil dibuat!`, { parse_mode: 'Markdown' });
+});
+
+bot.command("deletediscount", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const code = ctx.message.text.replace('/deletediscount', '').trim();
+  if (!code) return ctx.reply("Format: /deletediscount <KODE>");
+  
+  await Discount.deleteOne({ code });
+  ctx.reply(`🗑️ Diskon *${code}* berhasil dihapus!`, { parse_mode: 'Markdown' });
+});
+
 bot.command("admin", async (ctx) => {
   if (!admin.isAdmin(ctx)) return ctx.reply("⛔ Akses ditolak.");
   return admin.showAdminMenu(ctx);
@@ -465,6 +672,7 @@ bot.action("admin_stocks", async (ctx) => {
 
 // ======== STORE LOGIC ========
 bot.start(async (ctx) => {
+  await trackEvent(ctx.from.id, 'START');
   ctx.session = {};
   return showStoreMenu(ctx);
 });
@@ -511,17 +719,31 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
   const userId = ctx.from.id;
   
+  await trackEvent(userId, 'CHECKOUT', productId);
+  
   await store.clearCart(userId);
   await store.addToCart(userId, productId);
   
   const items = await store.getCart(userId);
   if (items.length === 0) return ctx.reply("❌ Produk tidak tersedia!");
 
-  const amount = await store.getCartTotal(userId);
+  let amount = await store.getCartTotal(userId);
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
     const buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
+    
+    // Cek diskon otomatis
+    let discountInfo = "";
+    const discount = await store.applyAutomaticDiscount(userId, productId, amount);
+    if (discount) {
+      amount = Math.max(0, amount - discount.deduction);
+      discountInfo = `\n🎁 *Diskon Otomatis:* -${formatRupiah(discount.deduction)}`;
+      
+      // Catat pemakaian diskon (opsional, bisa di update di DB jika perlu)
+      const { Discount } = require('./database');
+      await Discount.findByIdAndUpdate(discount._id, { $inc: { used_count: 1 } });
+    }
     
     // Hitung harga dasar (Base Amount) agar penjual menerima harga bersih 100%
     const baseAmount = calculateBaseAmount(amount);
@@ -538,7 +760,7 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     const qrPath = await generateQRImage(donation.qr_string, donation.id);
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
     
-    const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Harga Asli: ${formatRupiah(amount)}*\n💸 *Pajak Platform & QRIS: ${formatRupiah(finalAmount - amount)}*\n💳 *Total Bayar: ${formatRupiah(finalAmount)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
+    const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Harga Asli: ${formatRupiah(items[0].price)}*${discountInfo}\n💸 *Pajak Platform & QRIS: ${formatRupiah(finalAmount - amount)}*\n💳 *Total Bayar: ${formatRupiah(finalAmount)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
     await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
 
     const statusMsg = await ctx.replyWithMarkdown(`⏳ *Menunggu Pembayaran...*\nSistem akan memproses pesanan otomatis setelah pembayaran sukses.`);

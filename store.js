@@ -1,4 +1,4 @@
-const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require('./database');
+const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent } = require('./database');
 
 async function getActiveProducts() {
   return await Product.find({}).lean();
@@ -103,6 +103,54 @@ async function getOrder(orderId) {
   return await Order.findById(orderId).lean();
 }
 
+async function applyAutomaticDiscount(userId, productId, basePrice) {
+  const user = await User.findById(userId).lean();
+  if (!user) return null;
+
+  const now = new Date();
+  const activeDiscounts = await Discount.find({
+    active: true,
+    $or: [{ valid_until: null }, { valid_until: { $gt: now } }],
+    $or: [{ target_product_id: null }, { target_product_id: productId }],
+    $or: [{ target_user_id: null }, { target_user_id: userId }]
+  }).lean();
+
+  let bestDiscount = null;
+  let maxDeduction = 0;
+
+  for (const discount of activeDiscounts) {
+    if (discount.max_uses > 0 && discount.used_count >= discount.max_uses) continue;
+    if (discount.min_purchase > basePrice) continue;
+
+    // Cek trigger
+    let isEligible = false;
+    if (discount.trigger_event === 'FIRST_TIME' && user.purchase_count === 0) isEligible = true;
+    else if (discount.trigger_event === 'LOYALTY' && user.purchase_count >= 5) isEligible = true;
+    else if (discount.trigger_event === 'CART_ABANDON') {
+      const lastCheckout = await UserEvent.findOne({ user_id: userId, event_type: 'CHECKOUT' }).sort('-created_at');
+      if (lastCheckout && (now - lastCheckout.created_at) > 3600000) isEligible = true; // 1 jam
+    } else if (!discount.trigger_event || discount.trigger_event === 'ALL') {
+      isEligible = true;
+    }
+
+    if (isEligible) {
+      let deduction = 0;
+      if (discount.type === 'PERCENTAGE') {
+        deduction = (basePrice * discount.value) / 100;
+      } else if (discount.type === 'FIXED') {
+        deduction = discount.value;
+      }
+      
+      if (deduction > maxDeduction) {
+        maxDeduction = deduction;
+        bestDiscount = { ...discount, deduction };
+      }
+    }
+  }
+
+  return bestDiscount;
+}
+
 module.exports = {
   getActiveProducts,
   addToCart,
@@ -114,5 +162,6 @@ module.exports = {
   fulfillOrder,
   getSetting,
   setSetting,
-  getOrder
+  getOrder,
+  applyAutomaticDiscount
 };
