@@ -536,7 +536,7 @@ bot.command("run_marketing", async (ctx) => {
       return ctx.reply(`⚠️ Campaign tidak jalan: ${stats.reason}`);
     }
     const totalNonBuyer = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0);
-    const totalAll = totalNonBuyer + (stats.crossSell || 0) + (stats.dripStage2 || 0) + (stats.dripStage3 || 0);
+    const totalAll = totalNonBuyer + (stats.crossSell || 0) + (stats.stage2 || 0) + (stats.stage3 || 0);
     await ctx.reply(
       `✅ *Campaign Marketing Selesai!*\n\n` +
       `*📣 Campaign 1 — Belum Beli:*\n` +
@@ -547,8 +547,8 @@ bot.command("run_marketing", async (ctx) => {
       `🎯 Rekomendasi Produk Baru: ${stats.crossSell || 0} pesan\n` +
       `🏆 Sudah Lengkap (skip): ${stats.complete || 0} user\n\n` +
       `*💧 Campaign 3 — Drip Follow-Up:*\n` +
-      `⏰ Stage 2 (Urgensi): ${stats.dripStage2 || 0} pesan\n` +
-      `🔔 Stage 3 (Final + Diskon): ${stats.dripStage3 || 0} pesan\n\n` +
+      `⏰ Stage 2 (Urgensi): ${stats.stage2 || 0} pesan\n` +
+      `🔔 Stage 3 (Final + Diskon): ${stats.stage3 || 0} pesan\n\n` +
       `⏭ Di-skip anti-spam: ${stats.skipped || 0}\n` +
       `❌ Gagal/Blocked: ${stats.failed || 0}\n\n` +
       `📨 *Total terkirim: ${totalAll} pesan*`,
@@ -563,7 +563,7 @@ bot.command("run_marketing", async (ctx) => {
 bot.command("marketing_on", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(true);
-  scheduler.startDailyCron(bot);
+  scheduler.startCron(bot);
   ctx.reply("✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
 });
 
@@ -1128,7 +1128,7 @@ bot.launch()
   .then(() => {
     logger.success("Bot Toko Otomatis berjalan!");
     // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
-    scheduler.startDailyCron(bot);
+    scheduler.startCron(bot);
   })
   .catch((err) => {
     if (err.message && err.message.includes('409')) {

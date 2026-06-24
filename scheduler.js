@@ -521,8 +521,17 @@ function startCron(bot) {
   console.log('[CRON] Marketing Scheduler started. Berjalan tiap jam 10.00 WIB.');
 }
 
+function setMarketingEnabled(val) { marketingEnabled = val; }
+function isMarketingEnabled() { return marketingEnabled; }
+function stopDailyCron() {
+  if (cronTimer) { clearInterval(cronTimer); cronTimer = null; }
+}
+
 module.exports = {
   startCron,
   runMarketingCampaign,
-  markDripConverted
+  markDripConverted,
+  setMarketingEnabled,
+  isMarketingEnabled,
+  stopDailyCron
 };
