@@ -96,7 +96,7 @@ async function runNonBuyerCampaign(bot) {
       { purchase_count: null },
       { purchase_count: { $exists: false } }
     ],
-    is_blocked: false 
+    is_blocked: { $ne: true }
   }).lean();
   const stats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
 
@@ -200,7 +200,7 @@ async function runCrossSellCampaign(bot, allProducts) {
     'Klik /start untuk lihat dan langsung order! \u{1F525}'
   );
 
-  const partialBuyers = await User.find({ purchase_count: { $gt: 0 }, is_blocked: false }).lean();
+  const partialBuyers = await User.find({ purchase_count: { $gt: 0 }, is_blocked: { $ne: true } }).lean();
   const totalCount = allProducts.length;
   const stats = { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 

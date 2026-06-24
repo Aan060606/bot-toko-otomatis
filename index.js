@@ -663,7 +663,7 @@ bot.command("flash_sale", async (ctx) => {
   // Jalankan broadcast di background
   await runBroadcast(
     ctx,
-    { _id: { $nin: alreadyBoughtIds }, is_blocked: false },
+    { _id: { $nin: alreadyBoughtIds }, is_blocked: { $ne: true } },
     `FLASH_SALE_${productId}`,
     flashMsg
   );
