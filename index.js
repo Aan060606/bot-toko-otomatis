@@ -675,6 +675,18 @@ bot.command("admin", async (ctx) => {
   return admin.showAdminMenu(ctx);
 });
 
+bot.command("debug_users", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const users = await User.find({}).lean();
+  let text = `🐞 *DEBUG USERS (${users.length} total):*\n\n`;
+  users.forEach((u, i) => {
+    text += `${i+1}. ID: \`${u._id}\` | Name: ${u.first_name || '?'}\n`;
+    text += `   Purchases: ${u.purchase_count} | Blocked: ${u.is_blocked}\n`;
+    text += `   Last Broadcast: ${u.last_broadcast_at ? new Date(u.last_broadcast_at).toLocaleString('id-ID') : 'Never'}\n\n`;
+  });
+  ctx.reply(text, { parse_mode: 'Markdown' });
+});
+
 bot.action("admin_main", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();

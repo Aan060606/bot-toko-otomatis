@@ -49,7 +49,7 @@ async function showAdminCrmStats(ctx) {
   const { User, Order, OrderItem, Product, BroadcastLog } = require('./database');
 
   // Query paralel untuk efisiensi
-  const [totalUsers, buyers, nonBuyers, totalRevAgg, topProducts, lastCampaign, allProducts] = await Promise.all([
+  const [totalUsers, buyers, nonBuyers, blockedUsers, totalRevAgg, topProducts, lastCampaign, allProducts] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ purchase_count: { $gt: 0 } }),
     User.countDocuments({ 
@@ -59,6 +59,7 @@ async function showAdminCrmStats(ctx) {
         { purchase_count: { $exists: false } }
       ]
     }),
+    User.countDocuments({ is_blocked: true }),
     Order.aggregate([{ $match: { status: 'SUCCESS' } }, { $group: { _id: null, total: { $sum: '$total_amount' } } }]),
     // Produk terlaris: hitung total penjualan per produk
     OrderItem.aggregate([
@@ -94,7 +95,11 @@ async function showAdminCrmStats(ctx) {
   const buyerPct = totalUsers > 0 ? Math.round((buyers / totalUsers) * 100) : 0;
   text += `👥 *Total Pengguna:* ${totalUsers}\n`;
   text += `✅ Sudah Beli: ${buyers} (${buyerPct}%)\n`;
-  text += `❌ Belum Beli: ${nonBuyers} (${100 - buyerPct}%)\n\n`;
+  text += `❌ Belum Beli: ${nonBuyers} (${100 - buyerPct}%)\n`;
+  if (blockedUsers > 0) {
+    text += `🚫 *Memblokir Bot:* ${blockedUsers} user\n`;
+  }
+  text += `\n`;
 
   // === PENETRASI CROSS-SELL ===
   if (totalProductCount > 1 && penetrationAgg.length > 0) {
