@@ -2,8 +2,8 @@ require("dotenv").config();
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 
-const { execFile } = require("child_process");
 const { Telegraf, Markup, session } = require("telegraf");
+const axios = require("axios");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
@@ -36,41 +36,23 @@ function formatRupiah(amount) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
 }
 
-const CURL_HEADERS = [
-  "-H", "Accept: */*",
-  "-H", "Accept-Encoding: gzip, deflate, br, zstd",
-  "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-  "-H", "DNT: 1",
-  "-H", "Origin: https://saweria.co",
-  "-H", "Priority: u=1, i",
-  "-H", "Referer: https://saweria.co/",
-  "-H", "Sec-Fetch-Dest: empty",
-  "-H", "Sec-Fetch-Mode: cors",
-  "-H", "Sec-Fetch-Site: same-site",
-  "-H", 'sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-  "-H", "sec-ch-ua-mobile: ?0",
-  "-H", "sec-ch-ua-platform: \"Windows\"",
-  "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-];
+const SAWERIA_HEADERS = {
+  "Accept": "*/*",
+  "Accept-Language": "id-ID,id;q=0.9",
+  "Content-Type": "application/json",
+  "Origin": "https://saweria.co",
+  "Referer": "https://saweria.co/",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+};
 
-function curlPost(url, body) {
-  return new Promise((resolve, reject) => {
-    const args = ["-s", "--compressed", "-m", "30", "-X", "POST", url, "-H", "Content-Type: application/json", ...CURL_HEADERS, "-d", JSON.stringify(body)];
-    execFile("curl", args, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`curl error: ${err.message}`));
-      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON response: ${stdout.slice(0, 200)}`)); }
-    });
-  });
+async function sawPost(url, body) {
+  const res = await axios.post(url, body, { headers: SAWERIA_HEADERS, timeout: 30000 });
+  return res.data;
 }
 
-function curlGet(url) {
-  return new Promise((resolve, reject) => {
-    const args = ["-s", "--compressed", "-m", "30", url, ...CURL_HEADERS];
-    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`curl error: ${err.message}`));
-      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON response: ${stdout.slice(0, 200)}`)); }
-    });
-  });
+async function sawGet(url) {
+  const res = await axios.get(url, { headers: SAWERIA_HEADERS, timeout: 30000 });
+  return res.data;
 }
 
 async function withRetry(fn, retries = 3, delayMs = 2000) {
@@ -91,7 +73,7 @@ const SAWERIA_API = "https://backend.saweria.co";
 async function calculateAmount(amount) {
   return withRetry(async () => {
     const payload = { agree: true, notUnderage: true, message: "Order Toko", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: "bot", email: "bot@bot.bot", phone: "" } };
-    const res = await curlPost(`${SAWERIA_API}/donations/${SAWERIA_USERNAME}/calculate_pg_amount`, payload);
+    const res = await sawPost(`${SAWERIA_API}/donations/${SAWERIA_USERNAME}/calculate_pg_amount`, payload);
     if (!res?.data?.amount_to_pay) throw new Error("calculateAmount: respons tidak valid");
     return res.data;
   });
@@ -100,7 +82,7 @@ async function calculateAmount(amount) {
 async function createDonation(amount, email, name, message) {
   return withRetry(async () => {
     const payload = { agree: true, notUnderage: true, message: message || "-", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: name, email, phone: "" } };
-    const res = await curlPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
+    const res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
     if (!res?.data?.qr_string) {
       logger.error("Saweria Response (createDonation):", JSON.stringify(res));
       throw new Error("createDonation: respons tidak valid");
@@ -111,7 +93,7 @@ async function createDonation(amount, email, name, message) {
 
 async function checkPaymentStatus(donationId) {
   try {
-    const res = await curlGet(`${SAWERIA_API}/donations/qris/snap/${donationId}`);
+    const res = await sawGet(`${SAWERIA_API}/donations/qris/snap/${donationId}`);
     const d = res?.data;
     if (d) return { id: d.id, status: d.transaction_status, amount: d.amount_raw, created_at: d.created_at };
   } catch (e) {}
@@ -134,19 +116,13 @@ function stopPolling(donationId) {
 }
 
 async function sendPhotoCurl(chatId, photoPath, caption) {
-  const { execFile } = require("child_process");
-  return new Promise((resolve, reject) => {
-    execFile("curl", [
-      "-s", "-X", "POST", `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`,
-      "-F", `chat_id=${chatId}`,
-      "-F", `photo=@${photoPath}`,
-      "-F", `caption=${caption}`,
-      "-F", `parse_mode=Markdown`
-    ], (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
-    });
-  });
+  const FormData = require('form-data');
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('photo', require('fs').createReadStream(photoPath));
+  form.append('caption', caption);
+  form.append('parse_mode', 'Markdown');
+  await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 30000 });
 }
 
 async function notifyAdmin(text) {
