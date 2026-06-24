@@ -323,8 +323,8 @@ bot.use(async (ctx, next) => {
     const now = Date.now();
     const lastUpdate = activeUsersCache.get(userId) || 0;
 
-    // UPDATE DATABASE MAKSIMAL 1 KALI PER 5 MENIT per user
-    if (now - lastUpdate > 5 * 60 * 1000) {
+    // UPDATE DATABASE MAKSIMAL 1 KALI PER 1 HARI (24 Jam) per user
+    if (now - lastUpdate > 24 * 60 * 60 * 1000) {
       activeUsersCache.set(userId, now);
 
       const updateOp = {
