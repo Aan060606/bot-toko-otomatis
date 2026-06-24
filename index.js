@@ -2,6 +2,7 @@ require("dotenv").config();
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 
+const { execFile } = require("child_process");
 const { Telegraf, Markup, session } = require("telegraf");
 const axios = require("axios");
 const QRCode = require("qrcode");
@@ -36,23 +37,42 @@ function formatRupiah(amount) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
 }
 
-const SAWERIA_HEADERS = {
-  "Accept": "*/*",
-  "Accept-Language": "id-ID,id;q=0.9",
-  "Content-Type": "application/json",
-  "Origin": "https://saweria.co",
-  "Referer": "https://saweria.co/",
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-};
+const CURL_BROWSER_ARGS = [
+  "-s", "--compressed", "-m", "30",
+  "-H", "Accept: */*",
+  "-H", "Accept-Encoding: gzip, deflate, br, zstd",
+  "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+  "-H", "DNT: 1",
+  "-H", "Origin: https://saweria.co",
+  "-H", "Priority: u=1, i",
+  "-H", "Referer: https://saweria.co/",
+  "-H", "Sec-Fetch-Dest: empty",
+  "-H", "Sec-Fetch-Mode: cors",
+  "-H", "Sec-Fetch-Site: same-site",
+  "-H", 'sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+  "-H", "sec-ch-ua-mobile: ?0",
+  "-H", "sec-ch-ua-platform: \"Windows\"",
+  "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+];
 
-async function sawPost(url, body) {
-  const res = await axios.post(url, body, { headers: SAWERIA_HEADERS, timeout: 30000 });
-  return res.data;
+function sawPost(url, body) {
+  return new Promise((resolve, reject) => {
+    const args = [...CURL_BROWSER_ARGS, "-X", "POST", url, "-H", "Content-Type: application/json", "-d", JSON.stringify(body)];
+    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+      if (err) return reject(new Error(`curl error: ${err.message}`));
+      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON: ${stdout.slice(0, 300)}`)); }
+    });
+  });
 }
 
-async function sawGet(url) {
-  const res = await axios.get(url, { headers: SAWERIA_HEADERS, timeout: 30000 });
-  return res.data;
+function sawGet(url) {
+  return new Promise((resolve, reject) => {
+    const args = [...CURL_BROWSER_ARGS, url];
+    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
+      if (err) return reject(new Error(`curl error: ${err.message}`));
+      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON: ${stdout.slice(0, 300)}`)); }
+    });
+  });
 }
 
 async function withRetry(fn, retries = 3, delayMs = 2000) {
@@ -79,15 +99,7 @@ function calculateFeeLocally(amount) {
 async function createDonation(amount, email, name, message) {
   return withRetry(async () => {
     const payload = { agree: true, notUnderage: true, message: message || "-", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: name, email, phone: "" } };
-    // Try snap endpoint first, fallback to regular endpoint
-    let res;
-    try {
-      res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
-    } catch (e) {
-      if (e.response?.status === 403) {
-        res = await sawPost(`${SAWERIA_API}/donations/${SAWERIA_USERNAME}`, payload);
-      } else throw e;
-    }
+    const res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
     if (!res?.data?.qr_string) {
       logger.error("Saweria Response (createDonation):", JSON.stringify(res));
       throw new Error("createDonation: respons tidak valid");
@@ -120,7 +132,7 @@ function stopPolling(donationId) {
   }
 }
 
-async function sendPhotoCurl(chatId, photoPath, caption) {
+async function sendPhotoToTelegram(chatId, photoPath, caption) {
   const FormData = require('form-data');
   const form = new FormData();
   form.append('chat_id', String(chatId));
@@ -478,7 +490,7 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
     
     const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Total Bayar: ${formatRupiah(calc.amount_to_pay)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
-    await sendPhotoCurl(ctx.chat.id, qrPath, caption);
+    await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
 
     const statusMsg = await ctx.replyWithMarkdown(`⏳ *Menunggu Pembayaran...*\nSistem akan memproses pesanan otomatis setelah pembayaran sukses.`);
     
