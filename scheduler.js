@@ -90,7 +90,14 @@ async function runNonBuyerCampaign(bot) {
     'Klik /start sekarang! \u{1F680}'
   );
 
-  const nonBuyers = await User.find({ purchase_count: 0, is_blocked: false }).lean();
+  const nonBuyers = await User.find({ 
+    $or: [
+      { purchase_count: 0 },
+      { purchase_count: null },
+      { purchase_count: { $exists: false } }
+    ],
+    is_blocked: false 
+  }).lean();
   const stats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
 
   for (const user of nonBuyers) {

@@ -52,7 +52,13 @@ async function showAdminCrmStats(ctx) {
   const [totalUsers, buyers, nonBuyers, totalRevAgg, topProducts, lastCampaign, allProducts] = await Promise.all([
     User.countDocuments(),
     User.countDocuments({ purchase_count: { $gt: 0 } }),
-    User.countDocuments({ purchase_count: 0 }),
+    User.countDocuments({ 
+      $or: [
+        { purchase_count: 0 },
+        { purchase_count: null },
+        { purchase_count: { $exists: false } }
+      ]
+    }),
     Order.aggregate([{ $match: { status: 'SUCCESS' } }, { $group: { _id: null, total: { $sum: '$total_amount' } } }]),
     // Produk terlaris: hitung total penjualan per produk
     OrderItem.aggregate([
