@@ -723,6 +723,37 @@ bot.command("fix_db", async (ctx) => {
   ctx.reply(`✅ *Database berhasil dibersihkan!*\n\nData lama yang nyangkut:\n- Diperbaiki kolom belanja: ${res1.modifiedCount} user\n- Diperbaiki kolom blokir: ${res2.modifiedCount} user\n\nSilakan cek /debug_users lagi!`, { parse_mode: 'Markdown' });
 });
 
+bot.command("reset_db", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  
+  const args = ctx.message.text.split(' ');
+  if (args[1] !== 'CONFIRM') {
+    return ctx.reply(
+      `⚠️ *PERINGATAN RESET DATABASE* ⚠️\n\n` +
+      `Command ini akan **MENGHAPUS SEMUA DATA PELANGGAN DAN TRANSAKSI**:\n` +
+      `- Semua User & Cart dihapus\n` +
+      `- Semua Order & Transaksi dihapus\n` +
+      `- Semua Riwayat Marketing dihapus\n\n` +
+      `*(Produk, Stok, dan Setting TIDAK AKAN DIHAPUS)*\n\n` +
+      `Jika Anda yakin ingin memulai dari 0 (Fresh Start), ketik:\n` +
+      `\`/reset_db CONFIRM\``,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  await ctx.reply("⏳ Sedang menghapus semua data user dan transaksi...");
+
+  await User.deleteMany({});
+  await Order.deleteMany({});
+  await OrderItem.deleteMany({});
+  await Cart.deleteMany({});
+  await require('./database').UserEvent.deleteMany({});
+  await require('./database').DripLog.deleteMany({});
+  await require('./database').BroadcastLog.deleteMany({});
+
+  ctx.reply("✅ *DATABASE BERHASIL DI-RESET!*\n\nSemua riwayat user telah bersih kembali menjadi 0. Silakan klik /start untuk memulai sebagai user pertama yang bersih!", { parse_mode: 'Markdown' });
+});
+
 bot.action("admin_main", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
