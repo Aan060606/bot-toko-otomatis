@@ -2,9 +2,9 @@ require("dotenv").config();
 const dns = require("dns");
 dns.setDefaultResultOrder("ipv4first");
 
-const { execFile } = require("child_process");
 const { Telegraf, Markup, session } = require("telegraf");
 const axios = require("axios");
+const cloudscraper = require("cloudscraper");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
@@ -37,49 +37,44 @@ function formatRupiah(amount) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
 }
 
-const CURL_BROWSER_ARGS = [
-  "-sS", "--compressed", "-m", "30",
-  "-H", "Accept: */*",
-  "-H", "Accept-Encoding: gzip, deflate, br, zstd",
-  "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-  "-H", "DNT: 1",
-  "-H", "Origin: https://saweria.co",
-  "-H", "Priority: u=1, i",
-  "-H", "Referer: https://saweria.co/",
-  "-H", "Sec-Fetch-Dest: empty",
-  "-H", "Sec-Fetch-Mode: cors",
-  "-H", "Sec-Fetch-Site: same-site",
-  "-H", 'sec-ch-ua: "Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
-  "-H", "sec-ch-ua-mobile: ?0",
-  "-H", "sec-ch-ua-platform: \"Windows\"",
-  "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
-];
+const SAWERIA_HEADERS = {
+  "Origin": "https://saweria.co",
+  "Referer": "https://saweria.co/",
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+};
 
-function sawPost(url, body) {
-  return new Promise((resolve, reject) => {
-    const tmpFile = `/tmp/saw_${Date.now()}.json`;
-    fs.writeFileSync(tmpFile, JSON.stringify(body));
-    const args = [...CURL_BROWSER_ARGS, "-X", "POST", "-H", "Content-Type: application/json", "--data", `@${tmpFile}`, url];
-    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
-      try { fs.unlinkSync(tmpFile); } catch(e) {}
-      if (err) return reject(new Error(`curl: ${stderr || err.message}`));
-      const text = stdout.trim();
-      if (!text) return reject(new Error(`curl: empty response from ${url}`));
-      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON: ${text.slice(0, 200)}`)); }
+async function sawPost(url, body) {
+  try {
+    const res = await cloudscraper.post({
+      uri: url,
+      json: body,
+      headers: SAWERIA_HEADERS,
+      timeout: 30000
     });
-  });
+    return res;
+  } catch (err) {
+    if (err.response) {
+      throw new Error(`Saweria API Error (${err.response.statusCode}): ${err.response.body ? JSON.stringify(err.response.body).slice(0,200) : ''}`);
+    }
+    throw err;
+  }
 }
 
-function sawGet(url) {
-  return new Promise((resolve, reject) => {
-    const args = [...CURL_BROWSER_ARGS, url];
-    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(`curl error: ${stderr || err.message}`));
-      const text = stdout.trim();
-      if (!text) return reject(new Error(`curl: empty response`));
-      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON (${text.slice(0, 150)})`)); }
+async function sawGet(url) {
+  try {
+    const res = await cloudscraper.get({
+      uri: url,
+      json: true,
+      headers: SAWERIA_HEADERS,
+      timeout: 30000
     });
-  });
+    return res;
+  } catch (err) {
+    if (err.response) {
+      throw new Error(`Saweria API Error (${err.response.statusCode}): ${err.response.body ? JSON.stringify(err.response.body).slice(0,200) : ''}`);
+    }
+    throw err;
+  }
 }
 
 async function withRetry(fn, retries = 3, delayMs = 2000) {
