@@ -128,15 +128,11 @@ bot.use(session());
 
 const SAWERIA_API = (process.env.SAWERIA_API || 'https://backend.saweria.co').trim();
 
-// Fungsi untuk menghitung tagihan dasar agar hasil bersih (setelah dipotong 5% platform fee) sesuai dengan harga produk
+// Fungsi untuk menghitung tagihan dasar (Base Amount)
+// Menggunakan rumus: Harga Bersih / 0.85 
+// (Menutup 5% fee Saweria + 10% fee Withdraw jika rutin WD tiap Rp 50.000)
 function calculateBaseAmount(netTarget) {
-  // Biaya platform Saweria adalah 5% dengan minimum potongan Rp 150.
-  // Rumus: Net = Base - max(Base * 0.05, 150)
-  if (netTarget <= 2850) {
-    return netTarget + 150; // Jika harga sangat kecil, dipotong flat 150
-  }
-  // Jika harga > 2850, potongan adalah 5% proporsional
-  return Math.ceil(netTarget / 0.95);
+  return Math.ceil(netTarget / 0.85);
 }
 
 async function createDonation(amount, email, name, message) {
