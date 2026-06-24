@@ -468,15 +468,20 @@ bot.command("run_marketing", async (ctx) => {
     if (stats.skipped && stats.reason) {
       return ctx.reply(`⚠️ Campaign tidak jalan: ${stats.reason}`);
     }
-    const total = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0);
+    const totalNonBuyer = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0);
+    const totalAll = totalNonBuyer + (stats.crossSell || 0);
     await ctx.reply(
       `✅ *Campaign Marketing Selesai!*\n\n` +
+      `*📣 Campaign 1 — Belum Beli:*\n` +
       `🧊 Cold Lead: ${stats.cold || 0} pesan\n` +
       `🔥 Cart Abandon: ${stats.abandon || 0} pesan\n` +
-      `😴 Inactive: ${stats.inactive || 0} pesan\n` +
-      `⏭ Di-skip (anti-spam): ${stats.skipped || 0}\n` +
+      `😴 Inactive: ${stats.inactive || 0} pesan\n\n` +
+      `*🔁 Campaign 2 — Cross-Sell (Sudah Beli Sebagian):*\n` +
+      `🎯 Penawaran Produk Baru: ${stats.crossSell || 0} pesan\n` +
+      `✅ Sudah Lengkap (skip): ${stats.complete || 0} user\n\n` +
+      `⏭ Di-skip anti-spam: ${stats.skipped || 0}\n` +
       `❌ Gagal/Blocked: ${stats.failed || 0}\n\n` +
-      `📨 *Total terkirim: ${total} pesan*`,
+      `📨 *Total terkirim: ${totalAll} pesan*`,
       { parse_mode: 'Markdown' }
     );
   } catch (err) {
