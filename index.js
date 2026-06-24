@@ -222,10 +222,57 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
       await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
     }
 
+    // ── POST-PURCHASE UPSELL ──────────────────────────────────────────────
+    // Jalankan 5 detik setelah produk terkirim — saat user sedang "hot"
+    // Dibungkus setTimeout + try-catch agar tidak mengganggu alur utama
+    setTimeout(async () => {
+      try {
+        const allProducts = await Product.find({ active: 1 }).lean();
+        if (allProducts.length < 2) return; // Hanya 1 produk, skip upsell
+
+        // Ambil semua produk yang sudah dibeli user ini
+        const successOrders = await Order.find({ user_id: chatId, status: 'SUCCESS' }).lean();
+        const orderIds = successOrders.map(o => o._id);
+        const boughtItems = await OrderItem.find({ order_id: { $in: orderIds } }).lean();
+        const boughtIds = [...new Set(boughtItems.map(i => String(i.product_id)))];
+
+        // Nama produk yang baru saja dibeli (dari delivery ini)
+        const justBoughtName = deliveries[0] ? deliveries[0].product_id : 'produk ini';
+
+        // Cari produk yang belum dimiliki
+        const nextProduct = allProducts.find(p => !boughtIds.includes(String(p._id)));
+
+        if (nextProduct) {
+          // User belum lengkap — tawarkan produk berikutnya
+          await ctx.telegram.sendMessage(chatId,
+            `🎊 *Akses VIP kamu sudah aktif!*\n\n` +
+            `Btw, banyak member kami yang punya *${nextProduct.name}* juga lho — ` +
+            `dan sepertinya cocok banget buat kamu! 😊\n\n` +
+            `Sama-sama *Permanen* — sekali beli, selamanya.\n\n` +
+            `Tertarik? Klik /start untuk lihat! 🔥`,
+            { parse_mode: 'Markdown' }
+          );
+        } else {
+          // User sudah beli semua produk — apresiasi!
+          await ctx.telegram.sendMessage(chatId,
+            `🏆 *Luar biasa!*\n\n` +
+            `Kamu sekarang sudah punya *semua akses VIP* yang kami sediakan!\n\n` +
+            `Terima kasih sudah jadi member setia kami. Kamu luar biasa! ❤️`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      } catch (upsellErr) {
+        // Silent fail — jangan sampai error upsell mengganggu apapun
+        logger.warn('Post-purchase upsell gagal (silent):', upsellErr.message);
+      }
+    }, 5000); // Tunggu 5 detik agar user sempat baca produknya dulu
+    // ─────────────────────────────────────────────────────────────────────
+
   } catch (e) {
     logger.error(e);
   }
 }
+
 
 function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
   const startTime = Date.now();
@@ -469,16 +516,19 @@ bot.command("run_marketing", async (ctx) => {
       return ctx.reply(`⚠️ Campaign tidak jalan: ${stats.reason}`);
     }
     const totalNonBuyer = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0);
-    const totalAll = totalNonBuyer + (stats.crossSell || 0);
+    const totalAll = totalNonBuyer + (stats.crossSell || 0) + (stats.dripStage2 || 0) + (stats.dripStage3 || 0);
     await ctx.reply(
       `✅ *Campaign Marketing Selesai!*\n\n` +
       `*📣 Campaign 1 — Belum Beli:*\n` +
       `🧊 Cold Lead: ${stats.cold || 0} pesan\n` +
       `🔥 Cart Abandon: ${stats.abandon || 0} pesan\n` +
       `😴 Inactive: ${stats.inactive || 0} pesan\n\n` +
-      `*🔁 Campaign 2 — Cross-Sell (Sudah Beli Sebagian):*\n` +
-      `🎯 Penawaran Produk Baru: ${stats.crossSell || 0} pesan\n` +
-      `✅ Sudah Lengkap (skip): ${stats.complete || 0} user\n\n` +
+      `*🔁 Campaign 2 — Cross-Sell (Smart):*\n` +
+      `🎯 Rekomendasi Produk Baru: ${stats.crossSell || 0} pesan\n` +
+      `🏆 Sudah Lengkap (skip): ${stats.complete || 0} user\n\n` +
+      `*💧 Campaign 3 — Drip Follow-Up:*\n` +
+      `⏰ Stage 2 (Urgensi): ${stats.dripStage2 || 0} pesan\n` +
+      `🔔 Stage 3 (Final + Diskon): ${stats.dripStage3 || 0} pesan\n\n` +
       `⏭ Di-skip anti-spam: ${stats.skipped || 0}\n` +
       `❌ Gagal/Blocked: ${stats.failed || 0}\n\n` +
       `📨 *Total terkirim: ${totalAll} pesan*`,
@@ -533,7 +583,94 @@ bot.command("set_msg", async (ctx) => {
   ctx.reply(`✅ Pesan untuk segmen *${segmen}* berhasil diupdate!\n\nPreview:\n${pesan}`, { parse_mode: 'Markdown' });
 });
 
+// ── FLASH SALE TRIGGER ────────────────────────────────────────────────────
+// Format: /flash_sale <PRODUCT_ID> <DURASI>
+// Contoh: /flash_sale PROD-123 2jam  ATAU  /flash_sale PROD-123 30menit
+bot.command("flash_sale", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+
+  const args = ctx.message.text.replace('/flash_sale', '').trim().split(' ');
+  const productId = args[0];
+  const durasiStr = args[1];
+
+  if (!productId || !durasiStr) {
+    return ctx.reply(
+      "⚡ *Format Flash Sale:*\n\n" +
+      "`/flash_sale <PRODUCT_ID> <DURASI>`\n\n" +
+      "Contoh:\n" +
+      "`/flash_sale PROD-123 2jam`\n" +
+      "`/flash_sale PROD-123 30menit`\n" +
+      "`/flash_sale PROD-123 1hari`",
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  // Parse durasi ke milidetik
+  let durasiMs = 0;
+  if (durasiStr.includes('menit')) durasiMs = parseInt(durasiStr) * 60 * 1000;
+  else if (durasiStr.includes('jam')) durasiMs = parseInt(durasiStr) * 60 * 60 * 1000;
+  else if (durasiStr.includes('hari')) durasiMs = parseInt(durasiStr) * 24 * 60 * 60 * 1000;
+
+  if (!durasiMs || isNaN(durasiMs)) {
+    return ctx.reply("❌ Format durasi salah. Gunakan: `2jam`, `30menit`, atau `1hari`", { parse_mode: 'Markdown' });
+  }
+
+  const targetProduct = await Product.findById(productId).lean();
+  if (!targetProduct) {
+    return ctx.reply(`❌ Produk dengan ID \`${productId}\` tidak ditemukan.`, { parse_mode: 'Markdown' });
+  }
+
+  const deadline = new Date(Date.now() + durasiMs);
+  const deadlineStr = deadline.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
+  const durasiLabel = durasiStr;
+
+  // Buat diskon sementara otomatis berlaku sampai deadline
+  const flashCode = `FLASH_${productId}_${Date.now()}`;
+  await Discount.create({
+    code: flashCode,
+    type: 'FIXED',
+    value: 5000,
+    trigger_event: 'ALL',
+    target_product_id: productId,
+    valid_until: deadline,
+    active: true
+  });
+
+  // Susun pesan flash sale dengan countdown
+  const flashMsg =
+    `⚡ *FLASH SALE!*\n\n` +
+    `🎯 *${targetProduct.name}*\n\n` +
+    `Penawaran spesial hanya berlaku:\n` +
+    `⏰ *${durasiLabel.toUpperCase()} LAGI* (s/d pukul ${deadlineStr} WIB)\n\n` +
+    `🔥 Harga sudah termasuk diskon otomatis!\n\n` +
+    `Klik /start sekarang dan jangan sampai kehabisan!`;
+
+  // Query target: semua user yang BELUM beli produk ini, tidak diblokir
+  const orderItems = await OrderItem.find({ product_id: productId }).lean();
+  const orderIds = orderItems.map(i => i.order_id);
+  const buyerOrders = await Order.find({ _id: { $in: orderIds }, status: 'SUCCESS' }).lean();
+  const alreadyBoughtIds = [...new Set(buyerOrders.map(o => o.user_id))];
+
+  await ctx.reply(
+    `⚡ *Flash Sale dimulai!*\n\n` +
+    `Produk: *${targetProduct.name}*\n` +
+    `Durasi: ${durasiLabel}\n` +
+    `Berakhir: ${deadlineStr} WIB\n\n` +
+    `🚀 Mengirim broadcast ke semua target... Laporan dikirim setelah selesai.`,
+    { parse_mode: 'Markdown' }
+  );
+
+  // Jalankan broadcast di background
+  await runBroadcast(
+    ctx,
+    { _id: { $nin: alreadyBoughtIds }, is_blocked: false },
+    `FLASH_SALE_${productId}`,
+    flashMsg
+  );
+});
+
 bot.command("admin", async (ctx) => {
+
   if (!admin.isAdmin(ctx)) return ctx.reply("⛔ Akses ditolak.");
   return admin.showAdminMenu(ctx);
 });

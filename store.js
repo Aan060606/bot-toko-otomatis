@@ -1,4 +1,4 @@
-const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent } = require('./database');
+const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent, DripLog } = require('./database');
 
 async function getActiveProducts() {
   return await Product.find({}).lean();
@@ -95,7 +95,18 @@ async function fulfillOrder(orderId) {
     await OrderItem.findByIdAndUpdate(item._id, { fulfilled: 1 });
   }
   await Order.findByIdAndUpdate(orderId, { status: 'SUCCESS' });
-  
+
+  // Tandai semua DripLog user ini sebagai converted agar drip follow-up berhenti
+  const order = await Order.findById(orderId).lean();
+  if (order) {
+    try {
+      await DripLog.updateMany(
+        { user_id: order.user_id, converted: false },
+        { $set: { converted: true } }
+      );
+    } catch (e) { /* silent */ }
+  }
+
   return deliveredStocks;
 }
 

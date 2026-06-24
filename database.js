@@ -89,6 +89,17 @@ const DiscountSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now }
 });
 
+const DripLogSchema = new mongoose.Schema({
+  user_id: { type: Number, ref: 'User' },
+  product_id: { type: String, ref: 'Product' }, // Produk yang sedang ditawarkan di drip ini
+  stage: { type: Number, default: 1 },           // Tahap saat ini: 1 (awal), 2 (urgensi), 3 (final)
+  sent_at: { type: Date, default: Date.now },    // Kapan pesan tahap ini dikirim
+  converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
+  created_at: { type: Date, default: Date.now }
+});
+// TTL 30 hari agar log lama terhapus otomatis
+DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+
 const BroadcastLogSchema = new mongoose.Schema({
   admin_id: Number,
   target_segment: String, // 'ALL', 'BUYERS', 'NON_BUYERS', etc
@@ -109,5 +120,6 @@ module.exports = {
   Setting: mongoose.model('Setting', SettingSchema),
   UserEvent: mongoose.model('UserEvent', UserEventSchema),
   Discount: mongoose.model('Discount', DiscountSchema),
+  DripLog: mongoose.model('DripLog', DripLogSchema),
   BroadcastLog: mongoose.model('BroadcastLog', BroadcastLogSchema)
 };
