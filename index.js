@@ -129,10 +129,10 @@ bot.use(session());
 const SAWERIA_API = (process.env.SAWERIA_API || 'https://backend.saweria.co').trim();
 
 // Fungsi untuk menghitung tagihan dasar (Base Amount)
-// Menggunakan rumus: Harga Bersih / 0.85 
-// (Menutup 5% fee Saweria + 10% fee Withdraw jika rutin WD tiap Rp 50.000)
+// Rumus final: (Harga Asli * 1.04) lalu bulatkan ke atas ke kelipatan Rp 500
 function calculateBaseAmount(netTarget) {
-  return Math.ceil(netTarget / 0.85);
+  const base = netTarget * 1.04;
+  return Math.ceil(base / 500) * 500;
 }
 
 async function createDonation(amount, email, name, message) {
