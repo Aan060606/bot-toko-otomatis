@@ -8,7 +8,7 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 
-const db = require("./database");
+const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require("./database");
 const store = require("./store");
 const admin = require("./admin");
 
@@ -157,8 +157,7 @@ async function notifyAdmin(text) {
 async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
   stopPolling(donationId);
   try {
-    // Process Delivery
-    const deliveries = store.fulfillOrder(orderId);
+    const deliveries = await store.fulfillOrder(orderId);
     let deliveryText = `✅ *Pembayaran Berhasil!*\n\n🎉 Terima kasih atas pesanan Anda. Berikut adalah produk yang Anda beli:\n\n`;
     
     deliveries.forEach((d, i) => {
@@ -209,11 +208,15 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
 }
 
 // User Registration Middleware
-bot.use((ctx, next) => {
+bot.use(async (ctx, next) => {
   if (ctx.from) {
-    const user = db.prepare("SELECT id FROM users WHERE id = ?").get(ctx.from.id);
+    const user = await User.findById(ctx.from.id).lean();
     if (!user) {
-      db.prepare("INSERT INTO users (id, first_name, username) VALUES (?, ?, ?)").run(ctx.from.id, ctx.from.first_name || '', ctx.from.username || '');
+      await User.create({
+        _id: ctx.from.id,
+        first_name: ctx.from.first_name || '',
+        username: ctx.from.username || ''
+      });
     }
   }
   return next();
@@ -228,7 +231,7 @@ bot.command("admin", async (ctx) => {
 bot.action("admin_main", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
-  return admin.showAdminMenu(ctx, true);
+  return admin.showAdminMenu(ctx);
 });
 
 bot.action("admin_products", async (ctx) => {
@@ -269,14 +272,14 @@ bot.on('message', async (ctx, next) => {
   if (session.step === 'admin_set_header') {
     if (ctx.message.photo) {
       const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-      store.setSetting("header_type", "photo");
-      store.setSetting("header_file_id", fileId);
+      await store.setSetting("header_type", "photo");
+      await store.setSetting("header_file_id", fileId);
     } else if (ctx.message.animation) {
-      store.setSetting("header_type", "animation");
-      store.setSetting("header_file_id", ctx.message.animation.file_id);
+      await store.setSetting("header_type", "animation");
+      await store.setSetting("header_file_id", ctx.message.animation.file_id);
     } else if (ctx.message.text && ctx.message.text.startsWith("http")) {
-      store.setSetting("header_type", "url");
-      store.setSetting("header_file_id", ctx.message.text);
+      await store.setSetting("header_type", "url");
+      await store.setSetting("header_file_id", ctx.message.text);
     } else {
       return ctx.reply("❌ Harus berupa Foto, GIF, atau Link URL (http...). Coba kirim lagi:");
     }
@@ -288,7 +291,7 @@ bot.on('message', async (ctx, next) => {
 
   if (session.step === 'admin_manage_product_id') {
     const prodId = ctx.message.text.trim();
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(prodId);
+    const product = await Product.findById(prodId).lean();
     if (!product) return ctx.reply("❌ Produk tidak ditemukan! Coba lagi:");
     
     session.manageProductId = prodId;
@@ -305,28 +308,28 @@ bot.on('message', async (ctx, next) => {
   }
 
   if (session.step === 'admin_edit_prod_name') {
-    db.prepare("UPDATE products SET name = ? WHERE id = ?").run(ctx.message.text, session.manageProductId);
+    await Product.findByIdAndUpdate(session.manageProductId, { name: ctx.message.text });
     ctx.session = {};
     return ctx.reply("✅ Nama produk berhasil diubah!");
   }
   if (session.step === 'admin_edit_prod_price') {
     const price = parseInt(ctx.message.text);
     if (isNaN(price)) return ctx.reply("❌ Harus berupa angka!");
-    db.prepare("UPDATE products SET price = ? WHERE id = ?").run(price, session.manageProductId);
+    await Product.findByIdAndUpdate(session.manageProductId, { price: price });
     ctx.session = {};
     return ctx.reply("✅ Harga produk berhasil diubah!");
   }
   if (session.step === 'admin_edit_prod_preview') {
     let preview = ctx.message.text.trim();
     if (preview.toUpperCase() === 'SKIP' || preview.toUpperCase() === 'HAPUS') preview = null;
-    db.prepare("UPDATE products SET preview_url = ? WHERE id = ?").run(preview, session.manageProductId);
+    await Product.findByIdAndUpdate(session.manageProductId, { preview_url: preview });
     ctx.session = {};
     return ctx.reply("✅ Link cuplikan produk berhasil diubah!");
   }
   if (session.step === 'admin_edit_prod_content') {
     const newContent = ctx.message.text;
-    db.prepare("DELETE FROM stocks WHERE product_id = ?").run(session.manageProductId);
-    db.prepare("INSERT INTO stocks (product_id, content) VALUES (?, ?)").run(session.manageProductId, newContent);
+    await Stock.deleteMany({ product_id: session.manageProductId });
+    await Stock.create({ product_id: session.manageProductId, content: newContent });
     ctx.session = {};
     return ctx.reply("✅ Isi konten/Link VIP berhasil diperbarui! Pembeli berikutnya akan menerima link baru ini.");
   }
@@ -359,11 +362,11 @@ bot.on('message', async (ctx, next) => {
   }
   if (session.step === 'admin_add_stock_content') {
     const contents = ctx.message.text.split('\n').filter(l => l.trim().length > 0);
-    const insert = db.prepare("INSERT INTO stocks (product_id, content) VALUES (?, ?)");
     let added = 0;
-    db.transaction(() => {
-      for (const c of contents) { insert.run(session.stockProductId, c); added++; }
-    })();
+    for (const c of contents) {
+      await Stock.create({ product_id: session.stockProductId, content: c });
+      added++;
+    }
     ctx.session = {};
     return ctx.reply(`✅ Berhasil menambahkan ${added} stok untuk produk ID ${session.stockProductId}`);
   }
@@ -374,7 +377,13 @@ bot.action(/set_type_(auto|manual)/, async (ctx) => {
   const type = ctx.match[1].toUpperCase();
   const session = ctx.session || {};
   const id = "PROD-" + Date.now();
-  db.prepare("INSERT INTO products (id, name, price, type, preview_url) VALUES (?, ?, ?, ?, ?)").run(id, session.newProductName || "Tanpa Nama", session.newProductPrice || 0, type, session.newProductPreview || null);
+  await Product.create({
+    _id: id,
+    name: session.newProductName || "Tanpa Nama",
+    price: session.newProductPrice || 0,
+    type: type,
+    preview_url: session.newProductPreview || null
+  });
   ctx.session = {};
   await ctx.answerCbQuery();
   await ctx.reply(`✅ Produk berhasil ditambahkan!\n\nID: \`${id}\`\nNama: ${session.newProductName}\nHarga: ${session.newProductPrice}\nTipe: ${type}`, {parse_mode: "Markdown"});
@@ -387,8 +396,8 @@ bot.action(/edit_prod_(name|price|preview|content|delete)/, async (ctx) => {
   if (!prodId) return ctx.reply("❌ Sesi telah habis. Ulangi dari menu Kelola Produk.");
   
   if (action === 'delete') {
-    db.prepare("DELETE FROM products WHERE id = ?").run(prodId);
-    db.prepare("DELETE FROM stocks WHERE product_id = ?").run(prodId);
+    await Product.findByIdAndDelete(prodId);
+    await Stock.deleteMany({ product_id: prodId });
     ctx.session = {};
     await ctx.answerCbQuery("Produk Dihapus!");
     return ctx.reply("🗑 Produk beserta stoknya berhasil dihapus secara permanen.");
@@ -422,15 +431,15 @@ bot.action("menu_main", async (ctx) => {
   return showStoreMenu(ctx);
 });
 
-function showStoreMenu(ctx) {
-  const products = store.getActiveProducts();
+async function showStoreMenu(ctx) {
+  const products = await store.getActiveProducts();
   const text = `⛩️ 𝐉-𝐒𝐔𝐁 𝐂𝐎𝐋𝐋𝐄𝐂𝐓𝐈𝐎𝐍 𝐎𝐟𝐟𝐢𝐜𝐢𝐚𝐥 𝐇𝐮𝐛 ⛩️\n「 プレミアムアクセス • 𝑷𝒓𝒆𝒎𝒊𝒖𝒎 𝑨𝒄𝒄𝒆𝒔𝒔 」\n\nSilakan pilih lisensi VIP Anda di bawah ini ⚜️:\n\n_24/7 ON SIAP MELAYANI_`;
   const buttons = [];
   products.forEach(p => {
     if (p.preview_url) {
       buttons.push([Markup.button.url(`📺 Preview Content ${p.name}`, p.preview_url)]);
     }
-    buttons.push([Markup.button.callback(`🛒 Beli ${p.name} - ${formatRupiah(p.price)}`, `buy_now_${p.id}`)]);
+    buttons.push([Markup.button.callback(`🛒 Beli ${p.name} - ${formatRupiah(p.price)}`, `buy_now_${p._id}`)]);
   });
   
   if (process.env.ADMIN_CHAT_ID) {
@@ -438,8 +447,8 @@ function showStoreMenu(ctx) {
   }
   
   const keyboard = Markup.inlineKeyboard(buttons);
-  const hType = store.getSetting("header_type", "url");
-  const hFile = store.getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+  const hType = await store.getSetting("header_type", "url");
+  const hFile = await store.getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
   
   if (hType === "photo") {
     return ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
@@ -458,22 +467,21 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
   const userId = ctx.from.id;
   
-  // Clean cart and add this single item
-  store.clearCart(userId);
-  store.addToCart(userId, productId);
+  await store.clearCart(userId);
+  await store.addToCart(userId, productId);
   
-  const items = store.getCart(userId);
+  const items = await store.getCart(userId);
   if (items.length === 0) return ctx.reply("❌ Produk tidak tersedia!");
 
-  const amount = store.getCartTotal(userId);
+  const amount = await store.getCartTotal(userId);
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
     const calc = await calculateAmount(amount);
     const buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
     const donation = await createDonation(amount, "pembeli@bot.com", buyerName, "Beli " + productId);
-    const orderId = store.createOrder(donation.id, userId, calc.amount_to_pay, items);
-    store.clearCart(userId);
+    const orderId = await store.createOrder(donation.id, userId, calc.amount_to_pay, items);
+    await store.clearCart(userId);
 
     const qrPath = await generateQRImage(donation.qr_string, donation.id);
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
@@ -495,7 +503,6 @@ bot.catch((err, ctx) => {
   logger.error(`bot.catch:`, err.message);
 });
 
-// ADMIN: Simulate Payment without money
 bot.command("testpay", async (ctx) => {
   if (!ADMIN_CHAT_ID || ctx.from.id.toString() !== ADMIN_CHAT_ID.toString()) {
     return ctx.reply(`❌ Akses ditolak! Perintah ini hanya untuk Admin utama.\nID Anda saat ini: \`${ctx.from.id}\`\nSedangkan ID Admin di .env: \`${ADMIN_CHAT_ID}\``, { parse_mode: "Markdown" });
@@ -504,9 +511,9 @@ bot.command("testpay", async (ctx) => {
   if (args.length < 2) return ctx.reply("Format: `/testpay <ORDER_ID>`\nContoh: `/testpay ORD-12345`", { parse_mode: "Markdown" });
   
   const orderId = args[1];
-  const order = store.getOrder(orderId);
+  const order = await store.getOrder(orderId);
   if (!order) return ctx.reply("❌ Order ID tidak ditemukan di database.");
-  if (order.status === "PAID") return ctx.reply("⚠️ Order ini sudah berstatus PAID (Lunas).");
+  if (order.status === "SUCCESS") return ctx.reply("⚠️ Order ini sudah berstatus SUCCESS.");
 
   await ctx.reply("🔄 Memalsukan pembayaran sukses untuk " + orderId + "...");
   await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
@@ -514,7 +521,6 @@ bot.command("testpay", async (ctx) => {
 
 bot.launch().then(() => logger.success("Bot Toko Otomatis berjalan!"));
 
-// ======== HTTP SERVER FOR PING BOT ========
 const http = require("http");
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {

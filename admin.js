@@ -26,8 +26,8 @@ function showAdminMenu(ctx, edit = false) {
 }
 
 // Show products
-function showAdminProducts(ctx) {
-  const products = db.prepare("SELECT * FROM products").all();
+async function showAdminProducts(ctx) {
+  const products = await Product.find().lean();
   let text = `📦 *Daftar Produk*\n\n`;
   if (products.length === 0) text += "Belum ada produk.";
   else {

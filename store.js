@@ -1,112 +1,106 @@
-const db = require('./database');
-const { Markup } = require('telegraf');
+const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require('./database');
 
-function getActiveProducts() {
-  return db.prepare("SELECT * FROM products WHERE active = 1").all();
+async function getActiveProducts() {
+  return await Product.find({ active: 1 }).lean();
 }
 
-// Ensure settings table exists
-db.prepare("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)").run();
-
-function getSetting(key, def = null) {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+async function getSetting(key, def = null) {
+  const row = await Setting.findById(key).lean();
   return row ? row.value : def;
 }
 
-function setSetting(key, value) {
-  db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+async function setSetting(key, value) {
+  await Setting.findByIdAndUpdate(key, { value }, { upsert: true });
 }
 
-function addToCart(userId, productId) {
-  const existing = db.prepare("SELECT * FROM carts WHERE user_id = ? AND product_id = ?").get(userId, productId);
+async function addToCart(userId, productId) {
+  const existing = await Cart.findOne({ user_id: userId, product_id: productId });
   if (existing) {
-    db.prepare("UPDATE carts SET quantity = quantity + 1 WHERE id = ?").run(existing.id);
+    await Cart.updateOne({ _id: existing._id }, { $inc: { quantity: 1 } });
   } else {
-    db.prepare("INSERT INTO carts (user_id, product_id, quantity) VALUES (?, ?, 1)").run(userId, productId);
+    await Cart.create({ user_id: userId, product_id: productId, quantity: 1 });
   }
 }
 
-function getCart(userId) {
-  return db.prepare(`
-    SELECT c.id as cart_id, c.quantity, p.id as product_id, p.name, p.price, p.type 
-    FROM carts c 
-    JOIN products p ON c.product_id = p.id 
-    WHERE c.user_id = ?
-  `).all(userId);
+async function getCart(userId) {
+  const carts = await Cart.find({ user_id: userId }).populate('product_id').lean();
+  return carts.map(c => ({
+    cart_id: c._id.toString(),
+    quantity: c.quantity,
+    product_id: c.product_id._id,
+    name: c.product_id.name,
+    price: c.product_id.price,
+    type: c.product_id.type
+  }));
 }
 
-function clearCart(userId) {
-  db.prepare("DELETE FROM carts WHERE user_id = ?").run(userId);
+async function clearCart(userId) {
+  await Cart.deleteMany({ user_id: userId });
 }
 
-function getCartTotal(userId) {
-  const items = getCart(userId);
+async function getCartTotal(userId) {
+  const items = await getCart(userId);
   return items.reduce((total, item) => total + (item.price * item.quantity), 0);
 }
 
-function removeCartItem(cartId) {
-  db.prepare("DELETE FROM carts WHERE id = ?").run(cartId);
+async function removeCartItem(cartId) {
+  await Cart.findByIdAndDelete(cartId);
 }
 
-function createOrder(donationId, userId, totalAmount, cartItems) {
+async function createOrder(donationId, userId, totalAmount, cartItems) {
   const orderId = 'ORD-' + Date.now();
   
-  const insertOrder = db.prepare("INSERT INTO orders (id, donation_id, user_id, total_amount, status) VALUES (?, ?, ?, ?, 'PENDING')");
-  const insertItem = db.prepare("INSERT INTO order_items (order_id, product_id, quantity, price) VALUES (?, ?, ?, ?)");
-  
-  const transaction = db.transaction(() => {
-    insertOrder.run(orderId, donationId, userId, totalAmount);
-    for (const item of cartItems) {
-      insertItem.run(orderId, item.product_id, item.quantity, item.price);
-    }
+  await Order.create({
+    _id: orderId,
+    donation_id: donationId,
+    user_id: userId,
+    total_amount: totalAmount,
+    status: 'PENDING'
   });
   
-  transaction();
+  for (const item of cartItems) {
+    await OrderItem.create({
+      order_id: orderId,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      price: item.price
+    });
+  }
+  
   return orderId;
 }
 
-function fulfillOrder(orderId) {
-  const items = db.prepare("SELECT * FROM order_items WHERE order_id = ?").all(orderId);
+async function fulfillOrder(orderId) {
+  const items = await OrderItem.find({ order_id: orderId }).lean();
   const deliveredStocks = [];
   
-  const fulfillItem = db.prepare("UPDATE order_items SET fulfilled = 1 WHERE id = ?");
-  
-  const transaction = db.transaction(() => {
-    for (const item of items) {
-      for(let i=0; i<item.quantity; i++) {
-        const stock = db.prepare("SELECT * FROM stocks WHERE product_id = ? LIMIT 1").get(item.product_id);
-        if (stock) {
+  for (const item of items) {
+    for(let i=0; i<item.quantity; i++) {
+      const stock = await Stock.findOne({ product_id: item.product_id }).lean();
+      if (stock) {
+        deliveredStocks.push({
+          product_id: item.product_id,
+          content: stock.content
+        });
+      } else {
+        const product = await Product.findById(item.product_id).lean();
+        if (product && product.type === 'AUTO') {
           deliveredStocks.push({
             product_id: item.product_id,
-            content: stock.content
+            content: "❌ Habis stok otomatis. Harap hubungi Admin."
           });
-          // Fitur Unlimited Stok: Jangan hapus stok agar link bisa dipakai berkali-kali!
-          // db.prepare("DELETE FROM stocks WHERE id = ?").run(stock.id);
-        } else {
-          // No stock available, admin needs to fulfill manually or it's a static link
-          // We assume for static link VIP, we can just insert a static stock with 'AVAILABLE' and NOT mark it as SOLD
-          // or we check product type.
-          const product = db.prepare("SELECT * FROM products WHERE id = ?").get(item.product_id);
-          if (product && product.type === 'AUTO') {
-            // Wait, if it's auto but no stock, we push a "Out of Stock, contact admin"
-            deliveredStocks.push({
-              product_id: item.product_id,
-              content: "❌ Habis stok otomatis. Harap hubungi Admin."
-            });
-          }
         }
       }
-      fulfillItem.run(item.id);
     }
-    db.prepare("UPDATE orders SET status = 'SUCCESS' WHERE id = ?").run(orderId);
-  });
+    await OrderItem.findByIdAndUpdate(item._id, { fulfilled: 1 });
+  }
+  await Order.findByIdAndUpdate(orderId, { status: 'SUCCESS' });
   
-  transaction();
   return deliveredStocks;
 }
 
-function getOrder(orderId) {
-  return db.prepare("SELECT * FROM orders WHERE id = ?").get(orderId);
+async function getOrder(orderId) {
+  return await Order.findById(orderId).lean();
 }
 
 module.exports = {
