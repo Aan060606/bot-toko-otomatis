@@ -15,6 +15,7 @@ const path = require("path");
 const { User, Product, Stock, Cart, Order, OrderItem, Setting, UserEvent, Discount, BroadcastLog } = require("./database");
 const store = require("./store");
 const admin = require("./admin");
+const scheduler = require("./scheduler");
 
 const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
 const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim() || null;
@@ -455,6 +456,78 @@ bot.command("deletediscount", async (ctx) => {
   ctx.reply(`🗑️ Diskon *${code}* berhasil dihapus!`, { parse_mode: 'Markdown' });
 });
 
+// ======== MARKETING AUTOMATION COMMANDS ========
+
+// Trigger campaign marketing manual tanpa tunggu cron
+bot.command("run_marketing", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.reply("🚀 Menjalankan campaign marketing otomatis...\n\nProses berjalan di background. Laporan akan dikirim setelah selesai.");
+  
+  try {
+    const stats = await scheduler.runMarketingCampaign(bot);
+    if (stats.skipped && stats.reason) {
+      return ctx.reply(`⚠️ Campaign tidak jalan: ${stats.reason}`);
+    }
+    const total = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0);
+    await ctx.reply(
+      `✅ *Campaign Marketing Selesai!*\n\n` +
+      `🧊 Cold Lead: ${stats.cold || 0} pesan\n` +
+      `🔥 Cart Abandon: ${stats.abandon || 0} pesan\n` +
+      `😴 Inactive: ${stats.inactive || 0} pesan\n` +
+      `⏭ Di-skip (anti-spam): ${stats.skipped || 0}\n` +
+      `❌ Gagal/Blocked: ${stats.failed || 0}\n\n` +
+      `📨 *Total terkirim: ${total} pesan*`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (err) {
+    ctx.reply(`❌ Error saat menjalankan campaign: ${err.message}`);
+  }
+});
+
+// Nyalakan marketing otomatis harian
+bot.command("marketing_on", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  scheduler.setMarketingEnabled(true);
+  scheduler.startDailyCron(bot);
+  ctx.reply("✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
+});
+
+// Matikan marketing otomatis harian
+bot.command("marketing_off", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  scheduler.setMarketingEnabled(false);
+  scheduler.stopDailyCron();
+  ctx.reply("🔴 *Marketing otomatis DIMATIKAN.*\n\nGunakan /marketing_on untuk mengaktifkan kembali.", { parse_mode: 'Markdown' });
+});
+
+// Ubah template pesan marketing dari Telegram (tanpa coding ulang)
+bot.command("set_msg", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const parts = ctx.message.text.replace('/set_msg', '').trim().split(' ');
+  const segmen = parts[0];
+  const pesan = parts.slice(1).join(' ');
+
+  if (!segmen || !pesan) {
+    return ctx.reply(
+      "Format: /set_msg <segmen> <pesan>\n\n" +
+      "Segmen tersedia:\n" +
+      "• `cold_lead` — User yang belum pernah klik beli\n" +
+      "• `cart_abandon` — User klik beli tapi tidak jadi bayar\n" +
+      "• `inactive` — User tidak aktif > 7 hari\n\n" +
+      "Contoh:\n`/set_msg cart_abandon Hei! Jangan sampai kehabisan slot VIP ya! Klik /start sekarang!`",
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const validSegments = ['cold_lead', 'cart_abandon', 'inactive'];
+  if (!validSegments.includes(segmen)) {
+    return ctx.reply(`❌ Segmen tidak valid. Pilih: ${validSegments.join(', ')}`);
+  }
+
+  await Setting.findByIdAndUpdate(`marketing_${segmen}`, { value: pesan }, { upsert: true });
+  ctx.reply(`✅ Pesan untuk segmen *${segmen}* berhasil diupdate!\n\nPreview:\n${pesan}`, { parse_mode: 'Markdown' });
+});
+
 bot.command("admin", async (ctx) => {
   if (!admin.isAdmin(ctx)) return ctx.reply("⛔ Akses ditolak.");
   return admin.showAdminMenu(ctx);
@@ -831,7 +904,11 @@ bot.command("testpay", async (ctx) => {
 });
 
 bot.launch()
-  .then(() => logger.success("Bot Toko Otomatis berjalan!"))
+  .then(() => {
+    logger.success("Bot Toko Otomatis berjalan!");
+    // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
+    scheduler.startDailyCron(bot);
+  })
   .catch((err) => {
     if (err.message && err.message.includes('409')) {
       logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
