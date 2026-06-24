@@ -38,7 +38,7 @@ function formatRupiah(amount) {
 }
 
 const CURL_BROWSER_ARGS = [
-  "-s", "--compressed", "-m", "30",
+  "-s", "--compressed", "--http2", "-m", "30",
   "-H", "Accept: */*",
   "-H", "Accept-Encoding: gzip, deflate, br, zstd",
   "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -496,9 +496,12 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     
     activeIntervals[donation.id] = pollPaymentStatus(ctx, donation.id, ctx.chat.id, statusMsg.message_id, orderId);
   } catch (err) {
-    logger.error("Checkout error:", err.message);
+    const errMsg = err.message || String(err);
+    logger.error("Checkout error:", errMsg);
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
-    await ctx.reply("❌ Gagal menyiapkan pembayaran. Coba lagi nanti.");
+    // Kirim error detail ke admin untuk debugging
+    await notifyAdmin(`⚠️ *Checkout Error*\n\nUser: ${ctx.from.id}\nError: \`${errMsg.slice(0, 300)}\``);
+    await ctx.reply(`❌ Gagal menyiapkan pembayaran.\n\nError: \`${errMsg.slice(0, 200)}\`\n\nCoba lagi dalam beberapa menit.`, { parse_mode: "Markdown" });
   }
 });
 
