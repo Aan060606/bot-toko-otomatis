@@ -57,12 +57,15 @@ const CURL_BROWSER_ARGS = [
 
 function sawPost(url, body) {
   return new Promise((resolve, reject) => {
-    const args = [...CURL_BROWSER_ARGS, "-X", "POST", "-H", "Content-Type: application/json", "--data-raw", JSON.stringify(body), url];
+    const tmpFile = `/tmp/saw_${Date.now()}.json`;
+    fs.writeFileSync(tmpFile, JSON.stringify(body));
+    const args = [...CURL_BROWSER_ARGS, "-X", "POST", "-H", "Content-Type: application/json", "--data", `@${tmpFile}`, url];
     execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(`curl error: ${stderr || err.message}`));
+      try { fs.unlinkSync(tmpFile); } catch(e) {}
+      if (err) return reject(new Error(`curl: ${stderr || err.message}`));
       const text = stdout.trim();
-      if (!text) return reject(new Error(`curl: empty response`));
-      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON (${text.slice(0, 150)})`)); }
+      if (!text) return reject(new Error(`curl: empty response from ${url}`));
+      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON: ${text.slice(0, 200)}`)); }
     });
   });
 }
