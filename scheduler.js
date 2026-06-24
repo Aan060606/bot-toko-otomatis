@@ -20,20 +20,51 @@
  */
 
 const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount } = require('./database');
+const { Markup } = require('telegraf');
+
+const formatRupiah = (angka) => 'Rp' + angka.toLocaleString('id-ID');
 
 let marketingEnabled = true;
 let cronTimer = null;
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
-async function getMsg(key, defaultMsg) {
-  const row = await Setting.findById('marketing_' + key).lean();
-  return row ? row.value : defaultMsg;
+async function getSetting(key, defaultVal) {
+  const row = await Setting.findById(key).lean();
+  return row ? row.value : defaultVal;
 }
 
-async function sendSafe(bot, userId, text) {
+async function getMsg(key, defaultMsg) {
+  return await getSetting('marketing_' + key, defaultMsg);
+}
+
+function buildProductMarkup(product) {
+  const buttons = [];
+  if (product.preview_url) {
+    buttons.push([Markup.button.url(`📺 Preview Content ${product.name}`, product.preview_url)]);
+  }
+  buttons.push([Markup.button.callback(`🛒 Beli ${product.name} - ${formatRupiah(product.price)}`, `buy_now_${product._id}`)]);
+  return Markup.inlineKeyboard(buttons);
+}
+
+async function sendSafe(bot, userId, text, options = {}) {
   try {
-    await bot.telegram.sendMessage(userId, text, { parse_mode: 'Markdown' });
+    const extra = { parse_mode: 'Markdown' };
+    if (options.keyboard) extra.reply_markup = options.keyboard;
+    
+    if (options.media) {
+      const hType = options.mediaType || "url";
+      const hFile = options.media;
+      if (hType === "photo" || (hType === "url" && hFile.match(/\.(jpeg|jpg|png)$/i))) {
+        await bot.telegram.sendPhoto(userId, hFile, { caption: text, ...extra });
+      } else {
+        await bot.telegram.sendAnimation(userId, hFile, { caption: text, ...extra });
+      }
+    } else {
+      await bot.telegram.sendMessage(userId, text, extra);
+    }
+    
+    await User.findByIdAndUpdate(userId, { last_broadcast_at: new Date() });
     return { ok: true };
   } catch (err) {
     const isBlocked = err.description && (
@@ -42,7 +73,7 @@ async function sendSafe(bot, userId, text) {
       err.description.includes('chat not found')
     );
     if (isBlocked) await User.findByIdAndUpdate(userId, { is_blocked: true });
-    return { ok: false, blocked: isBlocked };
+    return { ok: false, isBlocked, error: err.message };
   }
 }
 
@@ -100,6 +131,26 @@ async function runNonBuyerCampaign(bot) {
   }).lean();
   const stats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
 
+  const allProducts = await Product.find({ active: 1 }).lean();
+  let defaultProduct = null;
+  if (allProducts.length > 0) {
+    const popular = await OrderItem.aggregate([
+      { $group: { _id: '$product_id', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 1 }
+    ]);
+    if (popular.length > 0) {
+      defaultProduct = allProducts.find(p => String(p._id) === String(popular[0]._id)) || allProducts[0];
+    } else {
+      defaultProduct = allProducts[0];
+    }
+  }
+
+  const hType = await getSetting("header_type", "url");
+  const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+  let keyboard = null;
+  if (defaultProduct) keyboard = buildProductMarkup(defaultProduct);
+
   for (const user of nonBuyers) {
     if (isInCooldown(user)) { stats.skipped++; continue; }
 
@@ -108,7 +159,7 @@ async function runNonBuyerCampaign(bot) {
                : segment === 'INACTIVE'     ? msgInactive
                : msgColdLead;
 
-    const result = await sendSafe(bot, user._id, msg);
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
       if (segment === 'CART_ABANDON') stats.abandon++;
@@ -223,7 +274,11 @@ async function runCrossSellCampaign(bot, allProducts) {
       .replace('{produk_lama}', boughtNames)
       .replace('{produk_baru}', targetProduct.name);
 
-    const result = await sendSafe(bot, user._id, msg);
+    const hType = await getSetting("header_type", "url");
+    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+    const keyboard = buildProductMarkup(targetProduct);
+
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
 
@@ -274,7 +329,12 @@ async function runDripFollowUp(bot) {
       `Penawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\n` +
       `Klik /start sekarang sebelum terlambat! \u{1F525}`;
 
-    const result = await sendSafe(bot, user._id, msg);
+    const hType = await getSetting("header_type", "url");
+    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+    let keyboard = null;
+    if (product) keyboard = buildProductMarkup(product);
+
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
       await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
@@ -322,7 +382,12 @@ async function runDripFollowUp(bot) {
       `Sebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\n` +
       `Klik /start sekarang untuk klaim diskon otomatismu! \u{1F381}`;
 
-    const result = await sendSafe(bot, user._id, msg);
+    const hType = await getSetting("header_type", "url");
+    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+    let keyboard = null;
+    if (product) keyboard = buildProductMarkup(product);
+
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
       await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
