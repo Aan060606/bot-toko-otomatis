@@ -13,10 +13,10 @@ const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require("./dat
 const store = require("./store");
 const admin = require("./admin");
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || null;
-const SAWERIA_USERNAME = process.env.SAWERIA_USERNAME || "zahwafe";
-const SAWERIA_USER_ID = process.env.SAWERIA_USER_ID || "d8e876df-405c-4e08-9708-9808b9037ea5";
+const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
+const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim() || null;
+const SAWERIA_USERNAME = (process.env.SAWERIA_USERNAME || 'zahwafe').trim();
+const SAWERIA_USER_ID = (process.env.SAWERIA_USER_ID || 'd8e876df-405c-4e08-9708-9808b9037ea5').trim();
 const CHECK_INTERVAL_MS = 7000;
 const MAX_WAIT_MINUTES = 15;
 
@@ -105,8 +105,10 @@ function calculateFeeLocally(amount) {
 
 async function createDonation(amount, email, name, message) {
   return withRetry(async () => {
+    const url = `${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`;
+    logger.info(`Calling Saweria: ${url} | amount=${amount} | user=${SAWERIA_USERNAME}`);
     const payload = { agree: true, notUnderage: true, message: message || "-", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: name, email, phone: "" } };
-    const res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
+    const res = await sawPost(url, payload);
     if (!res?.data?.qr_string) {
       logger.error("Saweria Response (createDonation):", JSON.stringify(res));
       throw new Error("createDonation: respons tidak valid");
