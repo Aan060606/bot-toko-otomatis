@@ -193,6 +193,16 @@ async function notifyAdmin(text) {
 async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
   stopPolling(donationId);
   try {
+    const updatedOrder = await Order.findOneAndUpdate(
+      { _id: orderId, status: 'PENDING' },
+      { $set: { status: 'SUCCESS', success_processed_at: new Date() } }
+    );
+    
+    if (!updatedOrder) {
+      logger.warn(`[IDEMPOTENT] Order ${orderId} sudah diproses. Skip.`);
+      return;
+    }
+
     const deliveries = await store.fulfillOrder(orderId);
     let deliveryText = `✅ *Pembayaran Berhasil!*\n\n🎉 Terima kasih atas pesanan Anda. Berikut adalah produk yang Anda beli:\n\n`;
     

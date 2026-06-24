@@ -50,6 +50,7 @@ const OrderSchema = new mongoose.Schema({
   total_amount: Number,
   status: { type: String, default: 'PENDING' },
   discount_id: { type: String, ref: 'Discount' },
+  success_processed_at: Date,
   created_at: { type: Date, default: Date.now }
 });
 
