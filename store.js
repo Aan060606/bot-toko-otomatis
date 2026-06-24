@@ -1,7 +1,7 @@
 const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require('./database');
 
 async function getActiveProducts() {
-  return await Product.find({ active: 1 }).lean();
+  return await Product.find({}).lean();
 }
 
 async function getSetting(key, def = null) {

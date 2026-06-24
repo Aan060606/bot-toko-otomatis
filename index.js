@@ -392,11 +392,11 @@ bot.on('message', async (ctx, next) => {
 
 bot.action(/set_type_(auto|manual)/, async (ctx) => {
   const type = ctx.match[1].toUpperCase();
-  const session = ctx.session || {};
-  session.newProductType = type;
-  session.step = 'admin_add_product_content';
+  ctx.session = ctx.session || {};
+  ctx.session.newProductType = type;
+  ctx.session.step = 'admin_add_product_content';
   await ctx.answerCbQuery();
-  await ctx.reply("🔗 Terakhir, masukkan *Isi Konten / Link VIP* (Bisa berupa teks panjang, link grup Telegram, link drive, dll) yang akan otomatis dikirimkan ke pembeli setelah mereka sukses membayar:", {parse_mode: "Markdown"});
+  await ctx.reply("🔗 Terakhir, masukkan *Isi Konten / Link VIP* (link grup Telegram, link drive, dll) yang akan otomatis dikirimkan ke pembeli setelah sukses membayar:", {parse_mode: "Markdown"});
 });
 
 bot.action(/edit_prod_(name|price|preview|content|delete)/, async (ctx) => {
