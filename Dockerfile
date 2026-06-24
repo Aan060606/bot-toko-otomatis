@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     libvulkan1 \
     unzip \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libglib2.0-0 \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
