@@ -220,6 +220,10 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
         $inc: { purchase_count: 1, total_spent: order.total_amount }
       });
       await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
+      if (order.discount_id) {
+        const { Discount } = require('./database');
+        await Discount.findByIdAndUpdate(order.discount_id, { $inc: { used_count: 1 } });
+      }
     }
 
     // ── POST-PURCHASE UPSELL ──────────────────────────────────────────────
@@ -1067,10 +1071,6 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     if (discount) {
       amount = Math.max(0, amount - discount.deduction);
       discountInfo = `\n🎁 *Diskon Otomatis:* -${formatRupiah(discount.deduction)}`;
-      
-      // Catat pemakaian diskon (opsional, bisa di update di DB jika perlu)
-      const { Discount } = require('./database');
-      await Discount.findByIdAndUpdate(discount._id, { $inc: { used_count: 1 } });
     }
     
     // Hitung harga dasar (Base Amount) agar penjual menerima harga bersih 100%
@@ -1082,7 +1082,7 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     // donation.amount_raw berisi harga akhir = Base Amount + Fee QRIS dari Saweria
     const finalAmount = donation.amount_raw || baseAmount;
     
-    const orderId = await store.createOrder(donation.id, userId, finalAmount, items);
+    const orderId = await store.createOrder(donation.id, userId, finalAmount, items, discount ? discount._id : null);
     await store.clearCart(userId);
 
     const qrPath = await generateQRImage(donation.qr_string, donation.id);
@@ -1120,7 +1120,7 @@ bot.command("testpay", async (ctx) => {
   if (!order) return ctx.reply("❌ Order ID tidak ditemukan di database.");
   if (order.status === "SUCCESS") return ctx.reply("⚠️ Order ini sudah berstatus SUCCESS.");
 
-  await ctx.reply("🔄 Memalsukan pembayaran sukses untuk " + orderId + "...");
+  await ctx.reply(`🔄 [QA TEST: PAY-03]\nMemalsukan status pembayaran gateway...\n✅ Mocking API Status: SETTLEMENT / PAID / CAPTURE\n✅ Mengeksekusi callback success untuk ${orderId}...`);
   await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
 });
 

@@ -1,7 +1,7 @@
 const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent, DripLog } = require('./database');
 
 async function getActiveProducts() {
-  return await Product.find({}).lean();
+  return await Product.find({ active: 1 }).lean();
 }
 
 async function getSetting(key, def = null) {
@@ -47,7 +47,13 @@ async function removeCartItem(cartId) {
   await Cart.findByIdAndDelete(cartId);
 }
 
-async function createOrder(donationId, userId, totalAmount, cartItems) {
+async function createOrder(donationId, userId, totalAmount, cartItems, discountId = null) {
+  // Batalkan semua order PENDING sebelumnya untuk user ini agar tidak ganda
+  await Order.updateMany(
+    { user_id: userId, status: 'PENDING' },
+    { $set: { status: 'CANCELLED' } }
+  );
+
   const orderId = 'ORD-' + Date.now();
   
   await Order.create({
@@ -55,7 +61,8 @@ async function createOrder(donationId, userId, totalAmount, cartItems) {
     donation_id: donationId,
     user_id: userId,
     total_amount: totalAmount,
-    status: 'PENDING'
+    status: 'PENDING',
+    discount_id: discountId
   });
   
   for (const item of cartItems) {

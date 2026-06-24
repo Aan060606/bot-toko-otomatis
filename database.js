@@ -47,6 +47,7 @@ const OrderSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
   total_amount: Number,
   status: { type: String, default: 'PENDING' },
+  discount_id: { type: String, ref: 'Discount' },
   created_at: { type: Date, default: Date.now }
 });
 
