@@ -57,7 +57,7 @@ const CURL_BROWSER_ARGS = [
 
 function sawPost(url, body) {
   return new Promise((resolve, reject) => {
-    const args = [...CURL_BROWSER_ARGS, "-X", "POST", url, "-H", "Content-Type: application/json", "-d", JSON.stringify(body)];
+    const args = [...CURL_BROWSER_ARGS, "-X", "POST", "-H", "Content-Type: application/json", "--data-raw", JSON.stringify(body), url];
     execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`curl error: ${stderr || err.message}`));
       const text = stdout.trim();
