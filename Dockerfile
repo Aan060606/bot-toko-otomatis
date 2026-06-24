@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     fonts-liberation \
     libvulkan1 \
+    unzip \
     --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
