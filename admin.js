@@ -1,6 +1,5 @@
 const { Markup } = require('telegraf');
 const { Product } = require('./database');
-const { v4: uuidv4 } = require('uuid');
 
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || null;
 

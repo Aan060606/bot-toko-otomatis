@@ -5,7 +5,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "test": "jest --runInBand",
+    "test:security": "jest tests/security --runInBand",
+    "test:unit": "jest tests/unit --runInBand",
+    "test:commands": "jest tests/commands --runInBand",
+    "test:crm": "jest tests/crm --runInBand",
+    "test:health": "jest tests/health --runInBand",
+    "qa:smoke": "npm run test:security && npm run test:unit && npm run test:commands"
   },
   "dependencies": {
     "axios": "^1.18.1",
@@ -22,6 +29,8 @@
     "uuid": "^14.0.1"
   },
   "devDependencies": {
+    "jest": "^30.4.2",
+    "mongodb-memory-server": "^11.2.0",
     "nodemon": "^3.1.4"
   }
 }

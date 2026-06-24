@@ -12,6 +12,10 @@ node_modules/
 # Logs
 *.log
 npm-debug.log*
+logs/
+
+# Test output
+coverage/
 
 # OS
 .DS_Store
@@ -27,4 +31,3 @@ silvia-roy-sitha/
 # Database
 store.db
 store.db-*
-

@@ -185,6 +185,7 @@ async function sendPhotoToTelegram(chatId, photoPath, caption) {
 }
 
 async function notifyAdmin(text) {
+  if (process.env.NODE_ENV === "test") return;
   if (!ADMIN_CHAT_ID) return;
   try { await bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }); } catch (e) {}
 }
@@ -229,47 +230,49 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
     // ── POST-PURCHASE UPSELL ──────────────────────────────────────────────
     // Jalankan 5 detik setelah produk terkirim — saat user sedang "hot"
     // Dibungkus setTimeout + try-catch agar tidak mengganggu alur utama
-    setTimeout(async () => {
-      try {
-        const allProducts = await Product.find({ active: 1 }).lean();
-        if (allProducts.length < 2) return; // Hanya 1 produk, skip upsell
+    if (process.env.NODE_ENV !== "test") {
+      setTimeout(async () => {
+        try {
+          const allProducts = await Product.find({ active: 1 }).lean();
+          if (allProducts.length < 2) return; // Hanya 1 produk, skip upsell
 
-        // Ambil semua produk yang sudah dibeli user ini
-        const successOrders = await Order.find({ user_id: chatId, status: 'SUCCESS' }).lean();
-        const orderIds = successOrders.map(o => o._id);
-        const boughtItems = await OrderItem.find({ order_id: { $in: orderIds } }).lean();
-        const boughtIds = [...new Set(boughtItems.map(i => String(i.product_id)))];
+          // Ambil semua produk yang sudah dibeli user ini
+          const successOrders = await Order.find({ user_id: chatId, status: 'SUCCESS' }).lean();
+          const orderIds = successOrders.map(o => o._id);
+          const boughtItems = await OrderItem.find({ order_id: { $in: orderIds } }).lean();
+          const boughtIds = [...new Set(boughtItems.map(i => String(i.product_id)))];
 
-        // Nama produk yang baru saja dibeli (dari delivery ini)
-        const justBoughtName = deliveries[0] ? deliveries[0].product_id : 'produk ini';
+          // Nama produk yang baru saja dibeli (dari delivery ini)
+          const justBoughtName = deliveries[0] ? deliveries[0].product_id : 'produk ini';
 
-        // Cari produk yang belum dimiliki
-        const nextProduct = allProducts.find(p => !boughtIds.includes(String(p._id)));
+          // Cari produk yang belum dimiliki
+          const nextProduct = allProducts.find(p => !boughtIds.includes(String(p._id)));
 
-        if (nextProduct) {
-          // User belum lengkap — tawarkan produk berikutnya
-          await ctx.telegram.sendMessage(chatId,
-            `🎊 *Akses VIP kamu sudah aktif!*\n\n` +
-            `Btw, banyak member kami yang punya *${nextProduct.name}* juga lho — ` +
-            `dan sepertinya cocok banget buat kamu! 😊\n\n` +
-            `Sama-sama *Permanen* — sekali beli, selamanya.\n\n` +
-            `Tertarik? Klik /start untuk lihat! 🔥`,
-            { parse_mode: 'Markdown' }
-          );
-        } else {
-          // User sudah beli semua produk — apresiasi!
-          await ctx.telegram.sendMessage(chatId,
-            `🏆 *Luar biasa!*\n\n` +
-            `Kamu sekarang sudah punya *semua akses VIP* yang kami sediakan!\n\n` +
-            `Terima kasih sudah jadi member setia kami. Kamu luar biasa! ❤️`,
-            { parse_mode: 'Markdown' }
-          );
+          if (nextProduct) {
+            // User belum lengkap — tawarkan produk berikutnya
+            await ctx.telegram.sendMessage(chatId,
+              `🎊 *Akses VIP kamu sudah aktif!*\n\n` +
+              `Btw, banyak member kami yang punya *${nextProduct.name}* juga lho — ` +
+              `dan sepertinya cocok banget buat kamu! 😊\n\n` +
+              `Sama-sama *Permanen* — sekali beli, selamanya.\n\n` +
+              `Tertarik? Klik /start untuk lihat! 🔥`,
+              { parse_mode: 'Markdown' }
+            );
+          } else {
+            // User sudah beli semua produk — apresiasi!
+            await ctx.telegram.sendMessage(chatId,
+              `🏆 *Luar biasa!*\n\n` +
+              `Kamu sekarang sudah punya *semua akses VIP* yang kami sediakan!\n\n` +
+              `Terima kasih sudah jadi member setia kami. Kamu luar biasa! ❤️`,
+              { parse_mode: 'Markdown' }
+            );
+          }
+        } catch (upsellErr) {
+          // Silent fail — jangan sampai error upsell mengganggu apapun
+          logger.warn('Post-purchase upsell gagal (silent):', upsellErr.message);
         }
-      } catch (upsellErr) {
-        // Silent fail — jangan sampai error upsell mengganggu apapun
-        logger.warn('Post-purchase upsell gagal (silent):', upsellErr.message);
-      }
-    }, 5000); // Tunggu 5 detik agar user sempat baca produknya dulu
+      }, 5000); // Tunggu 5 detik agar user sempat baca produknya dulu
+    }
     // ─────────────────────────────────────────────────────────────────────
 
   } catch (e) {
@@ -711,7 +714,7 @@ bot.command("debug_users", async (ctx) => {
   ctx.reply(text, { parse_mode: 'Markdown' });
 });
 
-bot.command("fix_db", async (ctx) => {
+async function handleFixDb(ctx) {
   if (!admin.isAdmin(ctx)) return;
   
   // Perbaiki semua user lama yang is_blocked atau purchase_count nya undefined
@@ -725,9 +728,13 @@ bot.command("fix_db", async (ctx) => {
   );
   
   ctx.reply(`✅ *Database berhasil dibersihkan!*\n\nData lama yang nyangkut:\n- Diperbaiki kolom belanja: ${res1.modifiedCount} user\n- Diperbaiki kolom blokir: ${res2.modifiedCount} user\n\nSilakan cek /debug_users lagi!`, { parse_mode: 'Markdown' });
+}
+
+bot.command("fix_db", async (ctx) => {
+  return handleFixDb(ctx);
 });
 
-bot.command("reset_db", async (ctx) => {
+async function handleResetDb(ctx) {
   if (!admin.isAdmin(ctx)) return;
   
   const args = ctx.message.text.split(' ');
@@ -756,6 +763,10 @@ bot.command("reset_db", async (ctx) => {
   await require('./database').BroadcastLog.deleteMany({});
 
   ctx.reply("✅ *DATABASE BERHASIL DI-RESET!*\n\nSemua riwayat user telah bersih kembali menjadi 0. Silakan klik /start untuk memulai sebagai user pertama yang bersih!", { parse_mode: 'Markdown' });
+}
+
+bot.command("reset_db", async (ctx) => {
+  return handleResetDb(ctx);
 });
 
 bot.action("admin_main", async (ctx) => {
@@ -1108,7 +1119,7 @@ bot.catch((err, ctx) => {
   logger.error(`bot.catch:`, err.message);
 });
 
-bot.command("testpay", async (ctx) => {
+async function handleTestPay(ctx) {
   if (!ADMIN_CHAT_ID || ctx.from.id.toString() !== ADMIN_CHAT_ID.toString()) {
     return ctx.reply(`❌ Akses ditolak! Perintah ini hanya untuk Admin utama.\nID Anda saat ini: \`${ctx.from.id}\`\nSedangkan ID Admin di .env: \`${ADMIN_CHAT_ID}\``, { parse_mode: "Markdown" });
   }
@@ -1122,34 +1133,50 @@ bot.command("testpay", async (ctx) => {
 
   await ctx.reply(`🔄 [QA TEST: PAY-03]\nMemalsukan status pembayaran gateway...\n✅ Mocking API Status: SETTLEMENT / PAID / CAPTURE\n✅ Mengeksekusi callback success untuk ${orderId}...`);
   await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
+}
+
+bot.command("testpay", async (ctx) => {
+  return handleTestPay(ctx);
 });
 
-bot.launch()
-  .then(() => {
-    logger.success("Bot Toko Otomatis berjalan!");
-    // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
-    scheduler.startCron(bot);
-  })
-  .catch((err) => {
-    if (err.message && err.message.includes('409')) {
-      logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
-      // Retry after 5 seconds
-      setTimeout(() => {
-        logger.info("Mencoba restart bot...");
-        bot.launch().then(() => logger.success("Bot berhasil restart!")).catch(e => logger.error("Gagal restart:", e.message));
-      }, 5000);
-    } else {
-      logger.error("Gagal menjalankan bot:", err.message);
-      process.exit(1);
-    }
+if (process.env.NODE_ENV !== "test") {
+  bot.launch()
+    .then(() => {
+      logger.success("Bot Toko Otomatis berjalan!");
+      // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
+      scheduler.startCron(bot);
+    })
+    .catch((err) => {
+      if (err.message && err.message.includes('409')) {
+        logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
+        // Retry after 5 seconds
+        setTimeout(() => {
+          logger.info("Mencoba restart bot...");
+          bot.launch().then(() => logger.success("Bot berhasil restart!")).catch(e => logger.error("Gagal restart:", e.message));
+        }, 5000);
+      } else {
+        logger.error("Gagal menjalankan bot:", err.message);
+        process.exit(1);
+      }
+    });
+
+  const http = require("http");
+  const PORT = process.env.PORT || 3000;
+  http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Bot is alive!");
+  }).listen(PORT, () => {
+    logger.info(`🌐 HTTP Server berjalan di port ${PORT} (untuk Ping Bot 24/7)`);
   });
+}
 
-
-const http = require("http");
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("Bot is alive!");
-}).listen(PORT, () => {
-  logger.info(`🌐 HTTP Server berjalan di port ${PORT} (untuk Ping Bot 24/7)`);
-});
+module.exports = {
+  bot,
+  calculateBaseAmount,
+  createDonation,
+  checkPaymentStatus,
+  onPaymentSuccess,
+  handleFixDb,
+  handleResetDb,
+  handleTestPay
+};

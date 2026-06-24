@@ -32,7 +32,9 @@ const ProductSchema = new mongoose.Schema({
 const StockSchema = new mongoose.Schema({
   product_id: { type: String, ref: 'Product' },
   content: String,
-  status: { type: String, default: 'AVAILABLE' }
+  status: { type: String, default: 'AVAILABLE' },
+  order_id: String,
+  fulfilled_at: Date
 });
 
 const CartSchema = new mongoose.Schema({

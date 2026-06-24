@@ -83,7 +83,10 @@ async function fulfillOrder(orderId) {
   
   for (const item of items) {
     for(let i=0; i<item.quantity; i++) {
-      const stock = await Stock.findOne({ product_id: item.product_id }).lean();
+      const stock = await Stock.findOneAndUpdate(
+        { product_id: item.product_id, status: 'AVAILABLE' },
+        { $set: { status: 'SOLD', order_id: orderId, fulfilled_at: new Date() } }
+      ).lean();
       if (stock) {
         deliveredStocks.push({
           product_id: item.product_id,
