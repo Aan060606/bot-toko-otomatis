@@ -95,7 +95,8 @@ async function withRetry(fn, retries = 3, delayMs = 2000) {
 const bot = new Telegraf(BOT_TOKEN);
 bot.use(session());
 
-const SAWERIA_API = "https://backend.saweria.co";
+const SAWERIA_API = (process.env.SAWERIA_API || 'https://backend.saweria.co').trim();
+
 
 function calculateFeeLocally(amount) {
   // Saweria QRIS fee: 0.8% dibulatkan ke atas
