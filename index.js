@@ -12,7 +12,7 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 
-const { User, Product, Stock, Cart, Order, OrderItem, Setting } = require("./database");
+const { User, Product, Stock, Cart, Order, OrderItem, Setting, UserEvent, Discount, BroadcastLog } = require("./database");
 const store = require("./store");
 const admin = require("./admin");
 
@@ -365,31 +365,22 @@ bot.command("broadcast_product", async (ctx) => {
   const args = ctx.message.text.replace('/broadcast_product', '').trim().split(' ');
   const productId = args[0];
   const msg = args.slice(1).join(' ');
-  
+
   if (!productId || !msg) {
-    return ctx.reply("Format salah. Gunakan: /broadcast_product <product_id> <pesan>");
+    return ctx.reply("Format salah. Gunakan: /broadcast_product <product_id> <pesan>\n\nContoh:\n/broadcast_product PROD-123 Hei, ada update untuk produk yang kamu beli!");
   }
-  
-  // Cari user yang pernah beli produk ini dengan mengecek Order
-  const { Order } = require('./database');
-  const orders = await Order.find({ status: 'SUCCESS' }).lean();
-  
-  const userIds = new Set();
-  for (const order of orders) {
-    const { OrderItem } = require('./database');
-    const items = await OrderItem.find({ order_id: order._id, product_id: productId }).lean();
-    if (items.length > 0) {
-      userIds.add(order.user_id);
-    }
+
+  // Efisien: 2 query saja, tidak ada loop N+1
+  const orderItems = await OrderItem.find({ product_id: productId }).lean();
+  const orderIds = orderItems.map(i => i.order_id);
+  const successOrders = await Order.find({ _id: { $in: orderIds }, status: 'SUCCESS' }).lean();
+  const userIds = [...new Set(successOrders.map(o => o.user_id))];
+
+  if (userIds.length === 0) {
+    return ctx.reply(`❌ Belum ada user yang berhasil membeli produk ID: \`${productId}\``, { parse_mode: 'Markdown' });
   }
-  
-  const usersToBroadcast = Array.from(userIds);
-  if (usersToBroadcast.length === 0) {
-    return ctx.reply(`❌ Belum ada user yang membeli produk ID: ${productId}`);
-  }
-  
-  // Hack the runBroadcast by passing a query that matches these users
-  await runBroadcast(ctx, { _id: { $in: usersToBroadcast } }, `BUYERS_${productId}`, msg);
+
+  await runBroadcast(ctx, { _id: { $in: userIds } }, `BUYERS_PRODUCT_${productId}`, msg);
 });
 
 bot.command("stats", async (ctx) => {
@@ -479,6 +470,49 @@ bot.action("admin_products", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
   return admin.showAdminProducts(ctx);
+});
+
+// Handler tombol CRM Statistik
+bot.action("admin_crm_stats", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return admin.showAdminCrmStats(ctx);
+});
+
+// Handler tombol Broadcast CRM — tampilkan panduan command
+bot.action("admin_crm_menu", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const text = `📢 *Panduan Broadcast CRM*\n\n` +
+    `Gunakan command berikut di chat ini:\n\n` +
+    `/broadcast\\_all <pesan>\n_Kirim ke semua user_\n\n` +
+    `/broadcast\\_buyer <pesan>\n_Kirim ke user yang sudah beli_\n\n` +
+    `/broadcast\\_nonbuyer <pesan>\n_Kirim ke user yang belum beli_\n\n` +
+    `/broadcast\\_product <product\\_id> <pesan>\n_Kirim ke pembeli produk tertentu_\n\n` +
+    `⏱ Delay: 1 detik per pesan (Anti-Spam)`;
+  const kb = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_main")]]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
+});
+
+// Handler tombol Diskon Otomatis — tampilkan panduan command
+bot.action("admin_discount", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const text = `🎟️ *Manajemen Diskon Otomatis*\n\n` +
+    `Gunakan command berikut di chat ini:\n\n` +
+    `/discount\\_list\n_Lihat semua diskon aktif_\n\n` +
+    `/creatediscount <KODE> <FIXED/PERCENTAGE> <NILAI> <TRIGGER>\n_Buat diskon baru_\n\nContoh:\n` +
+    "`/creatediscount NEWUSER FIXED 5000 FIRST_TIME`\n" +
+    "`/creatediscount LOYAL PERCENTAGE 10 LOYALTY`\n" +
+    "`/creatediscount PROMO FIXED 10000 ALL`\n\n" +
+    `/deletediscount <KODE>\n_Hapus diskon_\n\n` +
+    `*Trigger tersedia:*\n` +
+    `• \`FIRST_TIME\` — User belum pernah beli\n` +
+    `• \`LOYALTY\` — User sudah beli 5x+\n` +
+    `• \`CART_ABANDON\` — User checkout 1 jam lalu tapi belum bayar\n` +
+    `• \`ALL\` — Semua user`;
+  const kb = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_main")]]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
 });
 
 // Add Product flow

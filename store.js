@@ -110,9 +110,11 @@ async function applyAutomaticDiscount(userId, productId, basePrice) {
   const now = new Date();
   const activeDiscounts = await Discount.find({
     active: true,
-    $or: [{ valid_until: null }, { valid_until: { $gt: now } }],
-    $or: [{ target_product_id: null }, { target_product_id: productId }],
-    $or: [{ target_user_id: null }, { target_user_id: userId }]
+    $and: [
+      { $or: [{ valid_until: null }, { valid_until: { $gt: now } }] },
+      { $or: [{ target_product_id: null }, { target_product_id: productId }] },
+      { $or: [{ target_user_id: null }, { target_user_id: userId }] }
+    ]
   }).lean();
 
   let bestDiscount = null;

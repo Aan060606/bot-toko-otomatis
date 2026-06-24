@@ -64,11 +64,14 @@ const SettingSchema = new mongoose.Schema({
 
 const UserEventSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
-  event_type: String, // START, VIEW, CHECKOUT, SUCCESS, FAIL
+  event_type: String, // START, CHECKOUT, PAYMENT_SUCCESS
   product_id: { type: String, ref: 'Product' },
   metadata: mongoose.Schema.Types.Mixed,
   created_at: { type: Date, default: Date.now }
 });
+// TTL Index: MongoDB akan otomatis hapus event lama setelah 30 hari
+// Data User utama (purchase_count, total_spent, dll) TIDAK ikut terhapus
+UserEventSchema.index({ created_at: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 const DiscountSchema = new mongoose.Schema({
   code: String, // Or trigger name like 'NEW_USER'
