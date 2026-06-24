@@ -316,21 +316,28 @@ async function trackEvent(userId, eventType, productId = null, metadata = {}) {
 
 bot.use(async (ctx, next) => {
   if (ctx.from) {
-    const updateData = {
-      first_name: ctx.from.first_name || '',
-      username: ctx.from.username || '',
-      last_active_at: new Date()
+    const updateOp = {
+      $set: {
+        first_name: ctx.from.first_name || '',
+        username: ctx.from.username || '',
+        last_active_at: new Date()
+      },
+      $setOnInsert: {
+        purchase_count: 0,
+        total_spent: 0,
+        is_blocked: false
+      }
     };
     
     // Jika lewat link referral/start payload
     if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start ')) {
       const payload = ctx.message.text.split(' ')[1];
-      updateData.$setOnInsert = { source_ref: payload };
+      updateOp.$setOnInsert.source_ref = payload;
     }
 
     await User.findByIdAndUpdate(
       ctx.from.id,
-      { $set: updateData },
+      updateOp,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
   }
