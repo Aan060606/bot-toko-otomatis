@@ -38,7 +38,7 @@ function formatRupiah(amount) {
 }
 
 const CURL_BROWSER_ARGS = [
-  "-s", "--compressed", "-m", "30",
+  "-sS", "--compressed", "-m", "30",
   "-H", "Accept: */*",
   "-H", "Accept-Encoding: gzip, deflate, br, zstd",
   "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
