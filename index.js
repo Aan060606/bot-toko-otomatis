@@ -79,7 +79,15 @@ function calculateFeeLocally(amount) {
 async function createDonation(amount, email, name, message) {
   return withRetry(async () => {
     const payload = { agree: true, notUnderage: true, message: message || "-", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: name, email, phone: "" } };
-    const res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
+    // Try snap endpoint first, fallback to regular endpoint
+    let res;
+    try {
+      res = await sawPost(`${SAWERIA_API}/donations/snap/${SAWERIA_USER_ID}`, payload);
+    } catch (e) {
+      if (e.response?.status === 403) {
+        res = await sawPost(`${SAWERIA_API}/donations/${SAWERIA_USERNAME}`, payload);
+      } else throw e;
+    }
     if (!res?.data?.qr_string) {
       logger.error("Saweria Response (createDonation):", JSON.stringify(res));
       throw new Error("createDonation: respons tidak valid");
@@ -502,7 +510,22 @@ bot.command("testpay", async (ctx) => {
   await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
 });
 
-bot.launch().then(() => logger.success("Bot Toko Otomatis berjalan!"));
+bot.launch()
+  .then(() => logger.success("Bot Toko Otomatis berjalan!"))
+  .catch((err) => {
+    if (err.message && err.message.includes('409')) {
+      logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
+      // Retry after 5 seconds
+      setTimeout(() => {
+        logger.info("Mencoba restart bot...");
+        bot.launch().then(() => logger.success("Bot berhasil restart!")).catch(e => logger.error("Gagal restart:", e.message));
+      }, 5000);
+    } else {
+      logger.error("Gagal menjalankan bot:", err.message);
+      process.exit(1);
+    }
+  });
+
 
 const http = require("http");
 const PORT = process.env.PORT || 3000;
