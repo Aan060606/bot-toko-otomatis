@@ -314,32 +314,45 @@ async function trackEvent(userId, eventType, productId = null, metadata = {}) {
   }
 }
 
+// Cache in-memory agar tidak spam write ke MongoDB tiap kali user klik tombol
+const activeUsersCache = new Map();
+
 bot.use(async (ctx, next) => {
   if (ctx.from) {
-    const updateOp = {
-      $set: {
-        first_name: ctx.from.first_name || '',
-        username: ctx.from.username || '',
-        last_active_at: new Date()
-      },
-      $setOnInsert: {
-        purchase_count: 0,
-        total_spent: 0,
-        is_blocked: false
-      }
-    };
-    
-    // Jika lewat link referral/start payload
-    if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start ')) {
-      const payload = ctx.message.text.split(' ')[1];
-      updateOp.$setOnInsert.source_ref = payload;
-    }
+    const userId = ctx.from.id;
+    const now = Date.now();
+    const lastUpdate = activeUsersCache.get(userId) || 0;
 
-    await User.findByIdAndUpdate(
-      ctx.from.id,
-      updateOp,
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    // UPDATE DATABASE MAKSIMAL 1 KALI PER 5 MENIT per user
+    if (now - lastUpdate > 5 * 60 * 1000) {
+      activeUsersCache.set(userId, now);
+
+      const updateOp = {
+        $set: {
+          first_name: ctx.from.first_name || '',
+          username: ctx.from.username || '',
+          last_active_at: new Date()
+        },
+        $setOnInsert: {
+          purchase_count: 0,
+          total_spent: 0,
+          is_blocked: false
+        }
+      };
+      
+      // Jika lewat link referral/start payload
+      if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start ')) {
+        const payload = ctx.message.text.split(' ')[1];
+        updateOp.$setOnInsert.source_ref = payload;
+      }
+
+      // Jalankan tanpa harus menunggu (non-blocking) agar bot merespon lebih cepat
+      User.findByIdAndUpdate(
+        userId,
+        updateOp,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).catch(err => logger.error("Gagal update user tracking:", err.message));
+    }
   }
   return next();
 });
