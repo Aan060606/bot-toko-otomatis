@@ -419,6 +419,9 @@ async function runMarketingCampaign(bot) {
     return { skipped: true, reason: 'Marketing dimatikan Admin' };
   }
 
+  console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
+  const dripStats = await runDripFollowUp(bot);
+
   console.log('[MARKETING] Campaign 1: Non-Buyer...');
   const nonBuyerStats = await runNonBuyerCampaign(bot);
 
@@ -426,9 +429,6 @@ async function runMarketingCampaign(bot) {
 
   console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
   const crossSellStats = await runCrossSellCampaign(bot, allProducts);
-
-  console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
-  const dripStats = await runDripFollowUp(bot);
 
   const combined = {
     cold: nonBuyerStats.cold,
