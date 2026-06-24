@@ -70,13 +70,10 @@ bot.use(session());
 
 const SAWERIA_API = "https://backend.saweria.co";
 
-async function calculateAmount(amount) {
-  return withRetry(async () => {
-    const payload = { agree: true, notUnderage: true, message: "Order Toko", amount, payment_type: "qris", vote: "", currency: "IDR", customer_info: { first_name: "bot", email: "bot@bot.bot", phone: "" } };
-    const res = await sawPost(`${SAWERIA_API}/donations/${SAWERIA_USERNAME}/calculate_pg_amount`, payload);
-    if (!res?.data?.amount_to_pay) throw new Error("calculateAmount: respons tidak valid");
-    return res.data;
-  });
+function calculateFeeLocally(amount) {
+  // Saweria QRIS fee: 0.8% dibulatkan ke atas
+  const fee = Math.ceil(amount * 0.008);
+  return { amount_to_pay: amount + fee, pg_fee: fee };
 }
 
 async function createDonation(amount, email, name, message) {
@@ -463,9 +460,9 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
-    const calc = await calculateAmount(amount);
+    const calc = calculateFeeLocally(amount);
     const buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
-    const donation = await createDonation(amount, "pembeli@bot.com", buyerName, "Beli " + productId);
+    const donation = await createDonation(calc.amount_to_pay, "pembeli@bot.com", buyerName, "Beli " + productId);
     const orderId = await store.createOrder(donation.id, userId, calc.amount_to_pay, items);
     await store.clearCart(userId);
 
