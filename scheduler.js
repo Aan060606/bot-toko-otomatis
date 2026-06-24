@@ -26,6 +26,7 @@ const formatRupiah = (angka) => 'Rp' + angka.toLocaleString('id-ID');
 
 let marketingEnabled = true;
 let cronTimer = null;
+let lastCronDate = null; // Guard untuk mencegah double-fire di jam 10
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
@@ -77,46 +78,51 @@ async function sendSafe(bot, userId, text, options = {}) {
   }
 }
 
+// Cek apakah user pernah dikirimi broadcast dalam 3 hari terakhir (Anti-Spam Shield)
 function isInCooldown(user) {
   if (!user.last_broadcast_at) return false;
-  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-  return user.last_broadcast_at > threeDaysAgo;
+  const daysSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60 * 24);
+  return daysSinceLast < 3;
 }
-
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 // ─── CAMPAIGN 1: NON-BUYER ──────────────────────────────────────────────────
 
+// Klasifikasikan kenapa user belum beli
 async function classifyNonBuyer(user) {
-  const seventyTwoHoursAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const lastEvent = await UserEvent.findOne({ user_id: user._id }).sort({ created_at: -1 }).lean();
+  
+  if (lastEvent && lastEvent.event_type === 'CLICK_BUY') {
+    // Pernah klik beli, tapi tidak ada transaksi sukses -> Cart Abandon
+    return 'CART_ABANDON';
+  }
 
-  const recentCheckout = await UserEvent.findOne({
-    user_id: user._id,
-    event_type: 'CHECKOUT',
-    created_at: { $gte: seventyTwoHoursAgo }
-  }).lean();
+  const daysInactive = (new Date() - new Date(user.last_active_at)) / (1000 * 60 * 60 * 24);
+  if (daysInactive > 7) {
+    // Tidak buka bot > 7 hari -> Inactive
+    return 'INACTIVE';
+  }
 
-  if (recentCheckout) return 'CART_ABANDON';
-  if (user.last_active_at && user.last_active_at < sevenDaysAgo) return 'INACTIVE';
+  // Buka bot, belum pernah klik beli -> Cold Lead
   return 'COLD_LEAD';
 }
 
 async function runNonBuyerCampaign(bot) {
-  const msgColdLead = await getMsg('cold_lead',
-    '*Hei!* \u{1F44B}\n\nKamu sudah pernah mampir ke toko kami tapi belum bergabung jadi *Member VIP*.\n\n' +
-    'Kami punya berbagai pilihan *Akses VIP Permanen* \u2014 sekali bayar, nikmati selamanya! \u2705\n\n' +
-    'Klik /start untuk lihat semua pilihan genre! \u{1F525}'
-  );
   const msgCartAbandon = await getMsg('cart_abandon',
-    '\u{1F6D2} *Hei! Kamu hampir jadi Member VIP!*\n\n' +
-    'Sepertinya kamu tadi tertarik tapi belum menyelesaikan pembayaran.\n\n' +
-    'Ada kendala? Hubungi Admin jika butuh bantuan!\n\n' +
-    'Klik /start untuk lanjutkan. Jangan sampai ketinggalan! \u26A1'
+    '\u{1F6D2} *Tinggal 1 Langkah Lagi!*\n\n' +
+    'Hai, sepertinya transaksi VIP-mu belum selesai.\n' +
+    'Akses ratusan film/scene siap menantimu. Jangan ragu, koleksi akan terus diupdate secara otomatis!\n\n' +
+    'Klik /start lalu selesaikan pembayaranmu sekarang ya. \u{1F525}'
   );
+
   const msgInactive = await getMsg('inactive',
-    '\u{1F440} *Sudah lama tidak melihat kamu!*\n\n' +
-    'Kamu tahu tidak, kami punya banyak genre *VIP Permanen* sesuai selera?\n\n' +
+    '\u{1F440} *Udah lama nih gak kelihatan!*\n\n' +
+    'Kami punya banyak koleksi J-SUB terbaru lho. Sayang banget kalau kamu kelewatan.\n\n' +
+    'Klik /start sekarang dan cek katalog terbaru kami! \u2728'
+  );
+
+  const msgColdLead = await getMsg('cold_lead',
+    '\u{1F44B} *Hei! Belum nyobain Akses VIP kami?*\n\n' +
+    'Ribuan orang sudah bergabung dan menikmati konten J-SUB premium setiap hari.\n' +
     'Sekali beli \u2014 nikmati selamanya. Tanpa biaya langganan! \u{1F389}\n\n' +
     'Klik /start sekarang! \u{1F680}'
   );
@@ -161,10 +167,22 @@ async function runNonBuyerCampaign(bot) {
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
-      await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
       if (segment === 'CART_ABANDON') stats.abandon++;
       else if (segment === 'INACTIVE') stats.inactive++;
       else stats.cold++;
+
+      if (defaultProduct) {
+        const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(defaultProduct._id), converted: false }).lean();
+        if (!existingDrip) {
+          await DripLog.create({
+            user_id: user._id,
+            product_id: String(defaultProduct._id),
+            campaign_type: 'NON_BUYER',
+            stage: 1,
+            sent_at: new Date()
+          });
+        }
+      }
     } else {
       stats.failed++;
     }
@@ -189,18 +207,21 @@ async function getSmartRecommendation(userId, boughtIds, allProducts) {
   if (!unbought.length) return null;
 
   try {
-    // Cari user lain yang juga punya irisan produk yang sama
-    const orderItems = await OrderItem.find({ product_id: { $in: boughtIds } }).lean();
-    const orderIds = orderItems.map(i => i.order_id);
-    const similarOrders = await Order.find({
-      _id: { $in: orderIds },
-      user_id: { $ne: userId },
-      status: 'SUCCESS'
-    }).lean();
-    const similarUserIds = [...new Set(similarOrders.map(o => o.user_id))];
-
-    if (similarUserIds.length > 0) {
-      // Hitung produk yang paling sering dibeli similar users (yang belum dimiliki target)
+    // Cari user yang pernah beli produk yang sama
+    const similarUsersQuery = await OrderItem.aggregate([
+      { $match: { product_id: { $in: boughtIds } } },
+      { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
+      { $unwind: '$order' },
+      { $match: { 'order.status': 'SUCCESS', 'order.user_id': { $ne: userId } } },
+      { $group: { _id: '$order.user_id', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 100 }
+    ]);
+    
+    if (similarUsersQuery.length > 0) {
+      const similarUserIds = similarUsersQuery.map(u => u._id);
+      
+      // Cari produk apa yang paling banyak dibeli oleh similar users, yang belum dimiliki target
       const topCandidates = await OrderItem.aggregate([
         { $match: { product_id: { $nin: boughtIds } } },
         { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
@@ -255,6 +276,9 @@ async function runCrossSellCampaign(bot, allProducts) {
   const totalCount = allProducts.length;
   const stats = { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
+  const hType = await getSetting("header_type", "url");
+  const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+
   for (const user of partialBuyers) {
     if (isInCooldown(user)) { stats.skipped++; continue; }
 
@@ -274,21 +298,21 @@ async function runCrossSellCampaign(bot, allProducts) {
       .replace('{produk_lama}', boughtNames)
       .replace('{produk_baru}', targetProduct.name);
 
-    const hType = await getSetting("header_type", "url");
-    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
     const keyboard = buildProductMarkup(targetProduct);
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
-      await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
-
       // Simpan ke DripLog untuk follow-up bertingkat
-      await DripLog.create({
-        user_id: user._id,
-        product_id: String(targetProduct._id),
-        stage: 1,
-        sent_at: new Date()
-      });
+      const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(targetProduct._id), converted: false }).lean();
+      if (!existingDrip) {
+        await DripLog.create({
+          user_id: user._id,
+          product_id: String(targetProduct._id),
+          campaign_type: 'CROSS_SELL',
+          stage: 1,
+          sent_at: new Date()
+        });
+      }
 
       stats.crossSell++;
     } else {
@@ -299,11 +323,15 @@ async function runCrossSellCampaign(bot, allProducts) {
   return stats;
 }
 
-// ─── CAMPAIGN 3: DRIP FOLLOW-UP (3 TAHAP) ──────────────────────────────────
+// ─── CAMPAIGN 3: DRIP FOLLOW-UP (Stage 2 & 3) ──────────────────────────────
 
 async function runDripFollowUp(bot) {
-  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
   const stats = { stage2: 0, stage3: 0, skipped: 0, failed: 0 };
+  const now = new Date();
+  const threeDaysAgo = new Date(now.getTime() - (3 * 24 * 60 * 60 * 1000));
+
+  const hType = await getSetting("header_type", "url");
+  const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
   // === Stage 2: Kirim urgensi ke yang sudah 3 hari di stage 1 dan belum beli ===
   const stage1Logs = await DripLog.find({
@@ -314,13 +342,23 @@ async function runDripFollowUp(bot) {
 
   for (const log of stage1Logs) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || user.purchase_count > 0) {
-      // User sudah beli atau diblokir — tandai converted, skip
+    if (!user || user.is_blocked) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
       continue;
     }
 
-    const product = await require('./database').Product.findById(log.product_id).lean();
+    if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
+      await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
+      continue;
+    } else if (log.campaign_type === 'CROSS_SELL') {
+      const boughtIds = await getBoughtProductIds(user._id);
+      if (boughtIds.includes(String(log.product_id))) {
+        await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
+        continue;
+      }
+    }
+
+    const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
     const msg =
@@ -329,15 +367,12 @@ async function runDripFollowUp(bot) {
       `Penawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\n` +
       `Klik /start sekarang sebelum terlambat! \u{1F525}`;
 
-    const hType = await getSetting("header_type", "url");
-    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
-      await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
       stats.stage2++;
     } else {
       stats.failed++;
@@ -354,12 +389,23 @@ async function runDripFollowUp(bot) {
 
   for (const log of stage2Logs) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || user.purchase_count > 0) {
+    if (!user || user.is_blocked) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
       continue;
     }
 
-    const product = await require('./database').Product.findById(log.product_id).lean();
+    if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
+      await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
+      continue;
+    } else if (log.campaign_type === 'CROSS_SELL') {
+      const boughtIds = await getBoughtProductIds(user._id);
+      if (boughtIds.includes(String(log.product_id))) {
+        await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
+        continue;
+      }
+    }
+
+    const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
     // Buat diskon khusus untuk user ini saja, berlaku 24 jam
@@ -382,15 +428,12 @@ async function runDripFollowUp(bot) {
       `Sebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\n` +
       `Klik /start sekarang untuk klaim diskon otomatismu! \u{1F381}`;
 
-    const hType = await getSetting("header_type", "url");
-    const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
-      await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() });
       stats.stage3++;
     } else {
       stats.failed++;
@@ -436,66 +479,50 @@ async function runMarketingCampaign(bot) {
     inactive: nonBuyerStats.inactive,
     crossSell: crossSellStats.crossSell,
     complete: crossSellStats.complete,
-    dripStage2: dripStats.stage2,
-    dripStage3: dripStats.stage3,
-    skipped: (nonBuyerStats.skipped || 0) + (crossSellStats.skipped || 0) + (dripStats.skipped || 0),
-    failed: (nonBuyerStats.failed || 0) + (crossSellStats.failed || 0) + (dripStats.failed || 0)
+    stage2: dripStats.stage2,
+    stage3: dripStats.stage3,
+    skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped,
+    failed: nonBuyerStats.failed + crossSellStats.failed + dripStats.failed
   };
-
-  const totalSent = combined.cold + combined.abandon + combined.inactive
-                  + combined.crossSell + combined.dripStage2 + combined.dripStage3;
-
-  await BroadcastLog.create({
-    admin_id: 0,
-    target_segment: 'AUTO_MARKETING_FULL',
-    message_text:
-      'NonBuyer[C:' + combined.cold + '|A:' + combined.abandon + '|I:' + combined.inactive + '] ' +
-      'CrossSell:' + combined.crossSell + ' Complete:' + combined.complete + ' ' +
-      'Drip[S2:' + combined.dripStage2 + '|S3:' + combined.dripStage3 + '] ' +
-      'Skip:' + combined.skipped + ' Fail:' + combined.failed,
-    status: 'COMPLETED',
-    success_count: totalSent,
-    failed_count: combined.failed
-  });
 
   return combined;
 }
 
-// ─── CRON JOB HARIAN (jam 10.00 WIB) ────────────────────────────────────────
+// Fungsi helper delay (agar tidak spam rate limit)
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-function startDailyCron(bot) {
+function startCron(bot) {
   if (cronTimer) clearInterval(cronTimer);
-  cronTimer = setInterval(async () => {
-    const jakartaHour = new Date(
-      new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' })
-    ).getHours();
 
-    if (jakartaHour === 10) {
-      console.log('[MARKETING] Cron job harian berjalan...');
+  cronTimer = setInterval(async () => {
+    // Jalankan setiap jam 10 Pagi WIB (UTC+7)
+    const now = new Date();
+    const utcHours = now.getUTCHours();
+    const jakartaHour = (utcHours + 7) % 24;
+    
+    const today = now.toDateString();
+
+    if (jakartaHour === 10 && lastCronDate !== today) {
+      lastCronDate = today;
+      console.log(`[CRON] Menjalankan Marketing Automations (${now.toISOString()})...`);
+      
       try {
         const stats = await runMarketingCampaign(bot);
-        console.log('[MARKETING] Selesai:', JSON.stringify(stats));
+        if (!stats.skipped) {
+          console.log('[CRON] Marketing selesai. Stats:', stats);
+        } else {
+          console.log('[CRON] Marketing diskip:', stats.reason);
+        }
       } catch (err) {
-        console.error('[MARKETING] Error cron:', err.message);
+        console.error('[CRON] Gagal menjalankan marketing:', err);
       }
     }
-  }, 60 * 60 * 1000);
-
-  console.log('[MARKETING] Cron aktif — jam 10.00 WIB setiap hari');
+  }, 1000 * 60 * 60); // Cek setiap jam
+  console.log('[CRON] Marketing Scheduler started. Berjalan tiap jam 10.00 WIB.');
 }
-
-function stopDailyCron() {
-  if (cronTimer) { clearInterval(cronTimer); cronTimer = null; }
-}
-
-function setMarketingEnabled(val) { marketingEnabled = val; }
-function isMarketingEnabled() { return marketingEnabled; }
 
 module.exports = {
+  startCron,
   runMarketingCampaign,
-  markDripConverted,
-  startDailyCron,
-  stopDailyCron,
-  setMarketingEnabled,
-  isMarketingEnabled
+  markDripConverted
 };

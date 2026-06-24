@@ -92,6 +92,7 @@ const DiscountSchema = new mongoose.Schema({
 const DripLogSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
   product_id: { type: String, ref: 'Product' }, // Produk yang sedang ditawarkan di drip ini
+  campaign_type: { type: String, enum: ['NON_BUYER', 'CROSS_SELL'], default: 'NON_BUYER' },
   stage: { type: Number, default: 1 },           // Tahap saat ini: 1 (awal), 2 (urgensi), 3 (final)
   sent_at: { type: Date, default: Date.now },    // Kapan pesan tahap ini dikirim
   converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
