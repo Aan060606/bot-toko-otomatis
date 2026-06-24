@@ -38,7 +38,7 @@ function formatRupiah(amount) {
 }
 
 const CURL_BROWSER_ARGS = [
-  "-s", "--compressed", "--http2", "-m", "30",
+  "-s", "--compressed", "-m", "30",
   "-H", "Accept: */*",
   "-H", "Accept-Encoding: gzip, deflate, br, zstd",
   "-H", "Accept-Language: id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -58,9 +58,11 @@ const CURL_BROWSER_ARGS = [
 function sawPost(url, body) {
   return new Promise((resolve, reject) => {
     const args = [...CURL_BROWSER_ARGS, "-X", "POST", url, "-H", "Content-Type: application/json", "-d", JSON.stringify(body)];
-    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`curl error: ${err.message}`));
-      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON: ${stdout.slice(0, 300)}`)); }
+    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`curl error: ${stderr || err.message}`));
+      const text = stdout.trim();
+      if (!text) return reject(new Error(`curl: empty response`));
+      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON (${text.slice(0, 150)})`)); }
     });
   });
 }
@@ -68,9 +70,11 @@ function sawPost(url, body) {
 function sawGet(url) {
   return new Promise((resolve, reject) => {
     const args = [...CURL_BROWSER_ARGS, url];
-    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return reject(new Error(`curl error: ${err.message}`));
-      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error(`Non-JSON: ${stdout.slice(0, 300)}`)); }
+    execFile("curl", args, { maxBuffer: 2 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`curl error: ${stderr || err.message}`));
+      const text = stdout.trim();
+      if (!text) return reject(new Error(`curl: empty response`));
+      try { resolve(JSON.parse(text)); } catch (e) { reject(new Error(`Non-JSON (${text.slice(0, 150)})`)); }
     });
   });
 }
