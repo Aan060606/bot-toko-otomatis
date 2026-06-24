@@ -32,7 +32,7 @@ async function showAdminProducts(ctx) {
   if (products.length === 0) text += "Belum ada produk.";
   else {
     products.forEach((p, i) => {
-      text += `${i+1}. *${p.name}* (Rp${p.price}) - Tipe: ${p.type}\n   ID: \`${p.id}\`\n`;
+      text += `${i+1}. *${p.name}* (Rp${p.price}) - Tipe: ${p.type}\n   ID: \`${p._id}\`\n`;
     });
   }
   
