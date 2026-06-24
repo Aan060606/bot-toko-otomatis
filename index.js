@@ -707,6 +707,22 @@ bot.command("debug_users", async (ctx) => {
   ctx.reply(text, { parse_mode: 'Markdown' });
 });
 
+bot.command("fix_db", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  
+  // Perbaiki semua user lama yang is_blocked atau purchase_count nya undefined
+  const res1 = await User.updateMany(
+    { purchase_count: { $exists: false } },
+    { $set: { purchase_count: 0, total_spent: 0 } }
+  );
+  const res2 = await User.updateMany(
+    { is_blocked: { $exists: false } },
+    { $set: { is_blocked: false } }
+  );
+  
+  ctx.reply(`✅ *Database berhasil dibersihkan!*\n\nData lama yang nyangkut:\n- Diperbaiki kolom belanja: ${res1.modifiedCount} user\n- Diperbaiki kolom blokir: ${res2.modifiedCount} user\n\nSilakan cek /debug_users lagi!`, { parse_mode: 'Markdown' });
+});
+
 bot.action("admin_main", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
