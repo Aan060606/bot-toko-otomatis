@@ -41,7 +41,9 @@ function formatRupiah(amount) {
 }
 
 let browserInstance = null;
-async function getBrowser() {
+let bgPage = null;
+
+async function getBgPage() {
   if (!browserInstance) {
     logger.info("Membuka Headless Browser (Puppeteer Stealth)...");
     browserInstance = await puppeteer.launch({
@@ -54,54 +56,62 @@ async function getBrowser() {
         '--disable-web-security'
       ]
     });
+    
+    browserInstance.on('disconnected', () => {
+      logger.warn("Browser terputus/crash! Mengatur ulang instance...");
+      browserInstance = null;
+      bgPage = null;
+    });
   }
-  return browserInstance;
+  
+  if (!bgPage || bgPage.isClosed()) {
+    bgPage = await browserInstance.newPage();
+    await bgPage.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
+    try { await bgPage.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
+    logger.info("Background page siap!");
+  }
+  
+  return bgPage;
+}
+
+async function executeFetch(page, method, url, body) {
+  const reqFn = async (fetchUrl, fetchMethod, fetchBody) => {
+    const options = {
+      method: fetchMethod,
+      headers: { 'Origin': 'https://saweria.co', 'Referer': 'https://saweria.co/' }
+    };
+    if (fetchBody) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(fetchBody);
+    }
+    const response = await fetch(fetchUrl, options);
+    return { status: response.status, body: await response.text() };
+  };
+  
+  let res = await page.evaluate(reqFn, url, method, body);
+  
+  // Jika kena block Cloudflare lagi (HTML Just a moment)
+  if (res.body.includes('<!DOCTYPE html>') && res.body.includes('Just a moment')) {
+     logger.warn("Terkena challenge Cloudflare. Mengambil clearance ulang...");
+     await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
+     try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
+     res = await page.evaluate(reqFn, url, method, body);
+  }
+  
+  if (res.status >= 400) throw new Error(`Saweria API Error (${res.status}): ${res.body.slice(0, 200)}`);
+  return JSON.parse(res.body);
 }
 
 async function sawPost(url, body) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  try {
-    await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
-    try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 10000 }); } catch(e) { }
-
-    const res = await page.evaluate(async (fetchUrl, fetchBody) => {
-      const response = await fetch(fetchUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Origin': 'https://saweria.co', 'Referer': 'https://saweria.co/' },
-        body: JSON.stringify(fetchBody)
-      });
-      return { status: response.status, body: await response.text() };
-    }, url, body);
-    
-    if (res.status >= 400) throw new Error(`Saweria API Error (${res.status}): ${res.body.slice(0, 200)}`);
-    return JSON.parse(res.body);
-  } finally {
-    await page.close();
-  }
+  const page = await getBgPage();
+  return executeFetch(page, 'POST', url, body);
 }
 
 async function sawGet(url) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  try {
-    await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
-    try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 10000 }); } catch(e) { }
-
-    const res = await page.evaluate(async (fetchUrl) => {
-      const response = await fetch(fetchUrl, {
-        method: 'GET',
-        headers: { 'Origin': 'https://saweria.co', 'Referer': 'https://saweria.co/' }
-      });
-      return { status: response.status, body: await response.text() };
-    }, url);
-    
-    if (res.status >= 400) throw new Error(`Saweria API Error (${res.status}): ${res.body.slice(0, 200)}`);
-    return JSON.parse(res.body);
-  } finally {
-    await page.close();
-  }
+  const page = await getBgPage();
+  return executeFetch(page, 'GET', url, null);
 }
+
 
 async function withRetry(fn, retries = 3, delayMs = 2000) {
   for (let i = 0; i < retries; i++) {
