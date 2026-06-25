@@ -190,7 +190,8 @@ async function sendPhotoToTelegram(chatId, photoPath, caption) {
   form.append('photo', require('fs').createReadStream(photoPath));
   form.append('caption', caption);
   form.append('parse_mode', 'Markdown');
-  await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 30000 });
+  const res = await axios.post(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendPhoto`, form, { headers: form.getHeaders(), timeout: 30000 });
+  return res.data.result;
 }
 
 async function notifyAdmin(text) {
@@ -199,8 +200,12 @@ async function notifyAdmin(text) {
   try { await bot.telegram.sendMessage(ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }); } catch (e) {}
 }
 
-async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
+async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId) {
   stopPolling(donationId);
+  if (qrMsgId) {
+    try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
+  }
+  
   try {
     const updatedOrder = await Order.findOneAndUpdate(
       { _id: orderId, status: 'PENDING' },
@@ -300,7 +305,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId) {
 }
 
 
-function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
+function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
   const startTime = Date.now();
   const totalMs = MAX_WAIT_MINUTES * 60 * 1000;
 
@@ -311,15 +316,17 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
       const rawStatus = (data?.status || "").toUpperCase();
 
       if (["SUCCESS", "SETTLEMENT", "PAID", "CAPTURE"].includes(rawStatus)) {
-        await onPaymentSuccess(ctx, chatId, msgId, donationId, orderId);
+        await onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId);
       } else if (["FAILED", "EXPIRED", "CANCEL", "FAILURE", "DENY"].includes(rawStatus)) {
         stopPolling(donationId);
         try { await Order.findByIdAndUpdate(orderId, { status: 'FAILED' }); } catch (e) {}
-        try { await ctx.telegram.editMessageText(chatId, msgId, null, `❌ Pembayaran Gagal/Dibatalkan.`, { parse_mode: "Markdown" }); } catch (_) {}
+        if (qrMsgId) try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
+        try { await ctx.telegram.editMessageText(chatId, msgId, null, `❌ Pembayaran Gagal/Dibatalkan. Silakan checkout ulang.`, { parse_mode: "Markdown" }); } catch (_) {}
       } else if (secondsLeft <= 0) {
         stopPolling(donationId);
         try { await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED' }); } catch (e) {}
-        try { await ctx.telegram.editMessageText(chatId, msgId, null, `⏰ Waktu bayar habis.`, { parse_mode: "Markdown" }); } catch (_) {}
+        if (qrMsgId) try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
+        try { await ctx.telegram.editMessageText(chatId, msgId, null, `⏰ Waktu bayar habis. QR Code telah ditarik. Silakan checkout ulang.`, { parse_mode: "Markdown" }); } catch (_) {}
       }
     } catch (err) {}
   }, CHECK_INTERVAL_MS);
@@ -1480,11 +1487,11 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
     
     const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Harga Asli: ${formatRupiah(items[0].price)}*${discountInfo}\n💸 *Pajak Platform & QRIS: ${formatRupiah(finalAmount - amount)}*\n💳 *Total Bayar: ${formatRupiah(finalAmount)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
-    await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
+    const qrMsg = await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
 
     const statusMsg = await ctx.replyWithMarkdown(`⏳ *Menunggu Pembayaran...*\nSistem akan memproses pesanan otomatis setelah pembayaran sukses.`);
     
-    activeIntervals[donation.id] = pollPaymentStatus(ctx, donation.id, ctx.chat.id, statusMsg.message_id, orderId);
+    activeIntervals[donation.id] = pollPaymentStatus(ctx, donation.id, ctx.chat.id, statusMsg.message_id, orderId, qrMsg ? qrMsg.message_id : null);
   } catch (err) {
     const errMsg = err.message || String(err);
     logger.error("Checkout error:", errMsg);
