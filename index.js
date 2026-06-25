@@ -385,13 +385,18 @@ async function runBroadcast(adminCtx, queryFilter, segmentName, messageText) {
   const isConfirm = messageText.includes('CONFIRM');
 
   if (!isConfirm && !isDryRun) {
-    return adminCtx.reply(`🔍 [PREVIEW] Broadcast\n\nTarget Segmen: ${segmentName}\nJumlah Target: ${users.length} user\n\nUntuk mengirim pesan ini secara riil, tambahkan kata CONFIRM di akhir pesan Anda.\nUntuk mencoba simulasi (tanpa kirim), tambahkan DRY_RUN.`);
+    const safeSegment = segmentName.replace(/_/g, '\\_');
+    return adminCtx.reply(`🔍 *[PREVIEW] Broadcast*\n\nTarget Segmen: ${safeSegment}\nJumlah Target: ${users.length} user\n\nUntuk mengirim pesan ini secara riil, tambahkan kata \`CONFIRM\` di akhir pesan Anda.\nUntuk mencoba simulasi (tanpa kirim), tambahkan \`DRY_RUN\`.`, { parse_mode: 'Markdown' });
   }
 
   const finalMessage = messageText.replace(/CONFIRM|DRY_RUN/g, '').trim();
 
   if (isDryRun) {
-    return adminCtx.reply(`✅ [DRY-RUN] Selesai\n\nPesan (simulasi) akan terkirim ke ${users.length} user (${segmentName}).\nPesan:\n${finalMessage}`);
+    try {
+      return await adminCtx.reply(`✅ *[DRY-RUN] Selesai*\n\nPesan (simulasi) akan terkirim ke ${users.length} user (${segmentName.replace(/_/g, '\\_')}).\nPesan:\n${finalMessage}`, { parse_mode: 'Markdown' });
+    } catch (err) {
+      return await adminCtx.reply(`✅ [DRY-RUN] Selesai\n\nPesan (simulasi) akan terkirim ke ${users.length} user (${segmentName}).\nPesan:\n${finalMessage}`);
+    }
   }
 
   const statusMsg = await adminCtx.reply(`⏳ Memulai broadcast ke ${users.length} user (${segmentName})...\n\nMohon tunggu, proses mengirim 1 pesan per detik...`);
@@ -594,7 +599,7 @@ bot.command("marketing_on", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(true);
   scheduler.startCron(bot);
-  ctx.reply("✅ Marketing otomatis AKTIF!\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.");
+  ctx.reply("✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
 });
 
 // Matikan marketing otomatis harian
@@ -602,7 +607,7 @@ bot.command("marketing_off", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(false);
   scheduler.stopDailyCron();
-  ctx.reply("🔴 Marketing otomatis DIMATIKAN.\n\nGunakan /marketing_on untuk mengaktifkan kembali.");
+  ctx.reply("🔴 *Marketing otomatis DIMATIKAN.*\n\nGunakan `/marketing_on` untuk mengaktifkan kembali.", { parse_mode: 'Markdown' });
 });
 
 // Ubah template pesan marketing dari Telegram (tanpa coding ulang)
@@ -630,7 +635,11 @@ bot.command("set_msg", async (ctx) => {
   }
 
   await Setting.findByIdAndUpdate(`marketing_${segmen}`, { value: pesan }, { upsert: true });
-  ctx.reply(`✅ Pesan untuk segmen ${segmen} berhasil diupdate!\n\nPreview:\n${pesan}`);
+  try {
+    await ctx.reply(`✅ Pesan untuk segmen *${segmen.replace(/_/g, '\\_')}* berhasil diupdate!\n\nPreview:\n${pesan}`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply(`✅ Pesan untuk segmen ${segmen} berhasil diupdate!\n\nPreview:\n${pesan}`);
+  }
 });
 
 // ── FLASH SALE TRIGGER ────────────────────────────────────────────────────
@@ -761,7 +770,7 @@ async function handleFixDb(ctx) {
   const count2 = await User.countDocuments({ is_blocked: { $exists: false } });
 
   if (!isApply) {
-    return ctx.reply(`🔍 [DRY-RUN] /fix_db\n\nDokumen yang AKAN diperbaiki:\n- Kolom belanja kosong: ${count1} user\n- Kolom blokir kosong: ${count2} user\n\nUntuk mengeksekusi secara permanen, ketik:\n/fix_db APPLY CONFIRM`);
+    return ctx.reply(`🔍 *[DRY-RUN] /fix\\_db*\n\nDokumen yang AKAN diperbaiki:\n- Kolom belanja kosong: ${count1} user\n- Kolom blokir kosong: ${count2} user\n\nUntuk mengeksekusi secara permanen, ketik:\n\`/fix_db APPLY CONFIRM\``, { parse_mode: 'Markdown' });
   }
 
   // Lakukan audit logging

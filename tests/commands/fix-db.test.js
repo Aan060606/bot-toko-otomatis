@@ -26,7 +26,7 @@ describe('ADM-09 /fix_db safety', () => {
     const user = await User.findById(502).lean();
     expect(user.purchase_count).toBeUndefined();
     expect(user.is_blocked).toBeUndefined();
-    expect(ctx.reply).toHaveBeenCalledWith(expect.stringMatching(/dry-run|preview|backup/i));
+    expect(ctx.reply).toHaveBeenCalledWith(expect.stringMatching(/dry-run|preview|backup/i), expect.any(Object));
   });
 
   test('admin /fix_db APPLY CONFIRM should mutate data and save log', async () => {
