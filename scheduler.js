@@ -512,7 +512,7 @@ async function runDripFollowUp(bot) {
           target_user_id: user._id,
           type: 'PERCENTAGE',
           value: discountRule.percentage,
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000)
+          valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000)
         });
 
         stats.stage3++;
