@@ -891,6 +891,124 @@ bot.action("admin_main", async (ctx) => {
   return admin.showAdminMenu(ctx);
 });
 
+
+bot.action("admin_shop_menu", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return admin.showShopMenu(ctx);
+});
+
+bot.action("admin_marketing_menu", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return admin.showMarketingMenu(ctx);
+});
+
+bot.action("admin_system_menu", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return admin.showSystemMenu(ctx);
+});
+
+bot.action("admin_marketing_settings", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const text = `🤖 *Mesin Automasi Marketing*\n\nStatus: ${scheduler.isMarketingEnabled() ? '✅ AKTIF' : '❌ MATI'}\n\nPilih aksi di bawah:`;
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("🟢 Hidupkan", "marketing_action_on"), Markup.button.callback("🔴 Matikan", "marketing_action_off")],
+    [Markup.button.callback("▶️ Paksa Jalan", "marketing_action_run"), Markup.button.callback("🧪 Test Kirim", "marketing_action_test")],
+    [Markup.button.callback("✍️ Ubah Teks Pesan", "marketing_action_setmsg")],
+    [Markup.button.callback("🔙 Kembali", "admin_marketing_menu")]
+  ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
+});
+
+bot.action(/marketing_action_(on|off|run|test|setmsg)/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const action = ctx.match[1];
+  
+  if (action === 'on') {
+    scheduler.setMarketingEnabled(true);
+    return ctx.reply("✅ Automasi Marketing dihidupkan.");
+  } else if (action === 'off') {
+    scheduler.setMarketingEnabled(false);
+    return ctx.reply("❌ Automasi Marketing dimatikan.");
+  } else if (action === 'run') {
+    ctx.reply("▶️ Memaksa Marketing jalan sekarang...");
+    const stats = await scheduler.runDripFollowUp();
+    return ctx.reply(`✅ Selesai. Stats: ${JSON.stringify(stats)}`);
+  } else if (action === 'test') {
+    ctx.reply("🧪 Mengirim test marketing ke Anda...");
+    await bot.telegram.sendMessage(ctx.from.id, "*[PREVIEW]* Halo! Ini contoh pesan edukasi", { parse_mode: 'Markdown' });
+    return;
+  } else if (action === 'setmsg') {
+    ctx.session = ctx.session || {};
+    ctx.session.step = 'admin_set_msg';
+    return ctx.reply("✍️ *Ubah Pesan Marketing*\n\nKetik dengan format:\n`<TIPE> <PESAN BARU>`\n\nTipe: `CART_ABANDON`, `DRIP_DAY1`, `DRIP_DAY3`, `DRIP_DAY7`, `CROSS_SELL`\n\n_(Ketik BATAL untuk membatalkan)_", { parse_mode: "Markdown" });
+  }
+});
+
+bot.action("admin_flash_sale_ui", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_flash_sale';
+  return ctx.reply("⚡ *Buat Flash Sale*\n\nKetik detail Flash Sale dengan format:\n`<PRODUCT_ID> <HARGA_BARU> <DURASI_JAM>`\n\nContoh: `665d9a... 25000 2`\n\n_(Ketik BATAL untuk membatalkan)_", {parse_mode: "Markdown"});
+});
+
+bot.action("admin_search_user", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_search_user';
+  return ctx.reply("🔍 *Cari Profil User*\n\nKetik ID Telegram User yang ingin dicek:\n\n_(Ketik BATAL untuk membatalkan)_", {parse_mode: "Markdown"});
+});
+
+bot.action("admin_health", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const mongoose = require('mongoose');
+  const memUsage = process.memoryUsage();
+  let text = `🏥 *System Health Check*\n\n`;
+  text += `• MongoDB State: \`${mongoose.connection.readyState}\`\n`;
+  text += `• Cron Scheduler: \`${scheduler.isMarketingEnabled() ? 'ACTIVE' : 'INACTIVE'}\`\n`;
+  text += `• Uptime: \`${Math.floor(process.uptime())}s\`\n`;
+  text += `• Mem (RSS): \`${Math.round(memUsage.rss / 1024 / 1024)} MB\`\n`;
+  return ctx.reply(text, { parse_mode: 'Markdown' });
+});
+
+bot.action("admin_db_menu", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const text = `⚠️ *Zona Bahaya (Database)*\n\nHati-hati mengeksekusi aksi di bawah ini:`;
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("📦 Backup Manual", "db_action_backup")],
+    [Markup.button.callback("🛠 Perbaiki DB", "db_action_fix"), Markup.button.callback("🔥 Reset DB", "db_action_reset")],
+    [Markup.button.callback("🔙 Kembali", "admin_system_menu")]
+  ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
+});
+
+bot.action(/db_action_(backup|fix|reset)/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const act = ctx.match[1];
+  if (act === 'backup') {
+    ctx.reply("⏳ Sedang memproses backup...");
+    const backupFn = require('./backup');
+    await backupFn();
+    return ctx.reply("✅ Backup selesai.");
+  } else if (act === 'fix') {
+    ctx.message = { text: '/fix_db APPLY CONFIRM' }; 
+    return handleFixDb(ctx);
+  } else if (act === 'reset') {
+    ctx.session = ctx.session || {};
+    ctx.session.step = 'admin_reset_db';
+    return ctx.reply("🔥 *PERINGATAN BAHAYA*\n\nAnda akan MENGHAPUS SEMUA DATA PELANGGAN. Ketik tulisan `SAYA YAKIN RESET DATABASE INI` untuk melanjutkan.", {parse_mode: "Markdown"});
+  }
+});
+
 bot.action("admin_products", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
@@ -1038,6 +1156,79 @@ bot.on('message', async (ctx, next) => {
   }
 
   if (!ctx.message.text) return ctx.reply("❌ Harap kirimkan teks yang sesuai.");
+
+  if (session.step === 'admin_set_msg') {
+    const msg = ctx.message.text.trim();
+    ctx.session = {};
+    if (msg.toUpperCase() === 'BATAL') return ctx.reply("❌ Aksi dibatalkan.");
+    const args = msg.split(' ');
+    if (args.length < 2) return ctx.reply("Format salah. Batal.");
+    const type = args[0].toUpperCase();
+    const newMsg = args.slice(1).join(' ');
+    await store.setSetting("msg_" + type, newMsg);
+    return ctx.reply(`✅ Pesan untuk ${type} berhasil diubah!`);
+  }
+
+  if (session.step === 'admin_flash_sale') {
+    const msg = ctx.message.text.trim();
+    ctx.session = {};
+    if (msg.toUpperCase() === 'BATAL') return ctx.reply("❌ Aksi dibatalkan.");
+    const args = msg.split(' ');
+    if (args.length < 3) return ctx.reply("Format salah. Batal.");
+    const [productId, newPriceStr, durationHoursStr] = args;
+    const newPrice = parseInt(newPriceStr);
+    const durationHours = parseInt(durationHoursStr);
+    try {
+      const product = await Product.findById(productId);
+      if (!product) return ctx.reply("Produk tidak ditemukan.");
+      const oldPrice = product.price;
+      product.price = newPrice;
+      await product.save();
+      setTimeout(async () => {
+        product.price = oldPrice;
+        await product.save();
+        bot.telegram.sendMessage(ADMIN_CHAT_ID, `Flash sale produk ${product.name} telah selesai. Harga kembali ke Rp ${oldPrice}`);
+      }, durationHours * 3600000);
+      return ctx.reply(`✅ Flash Sale untuk ${product.name} aktif selama ${durationHours} jam! Harga diubah jadi Rp ${newPrice}`);
+    } catch (err) {
+      return ctx.reply(`Gagal: ${err.message}`);
+    }
+  }
+
+  if (session.step === 'admin_search_user') {
+    const msg = ctx.message.text.trim();
+    ctx.session = {};
+    if (msg.toUpperCase() === 'BATAL') return ctx.reply("❌ Aksi dibatalkan.");
+    try {
+      const targetUser = await User.findById(msg).lean();
+      if (!targetUser) return ctx.reply("❌ User tidak ditemukan di database.");
+      const text = `👤 *Data Pelanggan*\n\n` +
+                   `ID: \`${targetUser._id}\`\n` +
+                   `Nama: ${targetUser.first_name}\n` +
+                   `Username: ${targetUser.username}\n` +
+                   `Status: ${targetUser.purchase_count > 0 ? '✅ Sudah Beli' : '❌ Belum Beli'}\n` +
+                   `Total Belanja: Rp ${targetUser.total_spent ? targetUser.total_spent.toLocaleString('id-ID') : 0}\n` +
+                   `Jml Transaksi: ${targetUser.purchase_count}\n` +
+                   `Tgl Join: ${targetUser.joined_at ? new Date(targetUser.joined_at).toLocaleString() : '-'}\n` +
+                   `Tgl Aktif: ${targetUser.last_active_at ? new Date(targetUser.last_active_at).toLocaleString() : '-'}\n` +
+                   `Diblokir: ${targetUser.is_blocked ? 'Ya' : 'Tidak'}`;
+      return ctx.reply(text, { parse_mode: 'Markdown' });
+    } catch (err) {
+      return ctx.reply("❌ ID tidak valid, harus berupa angka.");
+    }
+  }
+
+  if (session.step === 'admin_reset_db') {
+    const msg = ctx.message.text.trim();
+    ctx.session = {};
+    if (msg === 'SAYA YAKIN RESET DATABASE INI') {
+      ctx.message = { text: '/reset_db APPLY CONFIRM' };
+      return handleResetDb(ctx);
+    } else {
+      return ctx.reply("❌ Teks konfirmasi tidak cocok. Batal.");
+    }
+  }
+
 
   if (session.step === 'admin_manage_product_id') {
     const prodId = ctx.message.text.trim();

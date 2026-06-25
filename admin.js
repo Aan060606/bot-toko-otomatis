@@ -9,19 +9,49 @@ function isAdmin(ctx) {
 }
 
 function showAdminMenu(ctx, edit = false) {
-  const text = `🛠 *Admin Panel*\n\nPilih menu di bawah:`;
+  const text = `🛠 *Admin Control Panel*\n\nPilih kategori manajemen di bawah:`;
   const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback("📦 Manajemen Produk", "admin_products"), Markup.button.callback("📥 Tambah Stok", "admin_stocks")],
-    [Markup.button.callback("📢 Broadcast CRM", "admin_crm_menu")],
-    [Markup.button.callback("🎟️ Diskon Otomatis", "admin_discount")],
-    [Markup.button.callback("👥 Statistik & CRM", "admin_crm_stats")],
-    [Markup.button.callback("🖼 Ubah Header", "admin_header"), Markup.button.callback("📊 Pesanan", "admin_orders")],
+    [Markup.button.callback("📦 Kelola Toko & Pesanan", "admin_shop_menu")],
+    [Markup.button.callback("📢 Marketing & CRM", "admin_marketing_menu")],
+    [Markup.button.callback("⚙️ Pengaturan Sistem", "admin_system_menu")]
   ]);
   
   if (edit) {
     return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
   }
   return ctx.replyWithMarkdown(text, keyboard);
+}
+
+function showShopMenu(ctx) {
+  const text = `📦 *Kelola Toko & Pesanan*\n\nManajemen inventaris, stok, dan daftar transaksi.`;
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback("➕ Manajemen Produk", "admin_products"), Markup.button.callback("📥 Tambah Stok", "admin_stocks")],
+    [Markup.button.callback("⚡ Buat Flash Sale", "admin_flash_sale_ui"), Markup.button.callback("📊 Daftar Pesanan", "admin_orders")],
+    [Markup.button.callback("🔙 Menu Utama", "admin_main")]
+  ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
+}
+
+function showMarketingMenu(ctx) {
+  const text = `📢 *Marketing & CRM*\n\nOtomatisasi pengiriman pesan dan pengelolaan pelanggan.`;
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback("📢 Broadcast Pesan", "admin_crm_menu"), Markup.button.callback("🎟️ Diskon Otomatis", "admin_discount")],
+    [Markup.button.callback("👥 Statistik Penjualan", "admin_crm_stats")],
+    [Markup.button.callback("🤖 Mesin Automasi", "admin_marketing_settings")],
+    [Markup.button.callback("🔙 Menu Utama", "admin_main")]
+  ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
+}
+
+function showSystemMenu(ctx) {
+  const text = `⚙️ *Pengaturan Sistem*\n\nKonfigurasi server, kesehatan database, dan antarmuka.`;
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback("🖼 Ubah Header Menu", "admin_header")],
+    [Markup.button.callback("🔍 Cari Profil User", "admin_search_user"), Markup.button.callback("🏥 Cek Kesehatan", "admin_health")],
+    [Markup.button.callback("⚠️ Database & Backup", "admin_db_menu")],
+    [Markup.button.callback("🔙 Menu Utama", "admin_main")]
+  ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
 }
 
 // Show products
@@ -144,6 +174,9 @@ async function showAdminCrmStats(ctx) {
 module.exports = {
   isAdmin,
   showAdminMenu,
+  showShopMenu,
+  showMarketingMenu,
+  showSystemMenu,
   showAdminProducts,
   showAdminCrmStats
 };
