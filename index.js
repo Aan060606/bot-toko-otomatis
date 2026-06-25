@@ -1231,6 +1231,20 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   }
 });
 
+// Fallback untuk semua pesan teks yang tidak dikenali
+bot.on('text', async (ctx, next) => {
+  // Hanya respon di private chat, hindari spam jika bot masuk grup
+  if (ctx.chat && ctx.chat.type !== 'private') return next();
+  
+  // Jika ini bukan perintah command (tidak berawalan /)
+  if (!ctx.message.text.startsWith('/')) {
+    await trackEvent(ctx.from.id, 'START');
+    ctx.session = {};
+    return showStoreMenu(ctx);
+  }
+  return next();
+});
+
 bot.catch((err, ctx) => {
   logger.error(`bot.catch:`, err.message);
 });
