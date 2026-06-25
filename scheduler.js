@@ -39,6 +39,10 @@ async function getMsg(key, defaultMsg) {
   return await getSetting('marketing_' + key, defaultMsg);
 }
 
+function strikeThrough(text) {
+  return text.split('').map(char => char + '\u0336').join('');
+}
+
 function buildProductMarkup(product, discountAmount = 0) {
   const buttons = [];
   if (product.preview_url) {
@@ -47,7 +51,8 @@ function buildProductMarkup(product, discountAmount = 0) {
   
   if (discountAmount > 0 && product.price > discountAmount) {
     const finalPrice = product.price - discountAmount;
-    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} (Diskon!) - ${formatRupiah(finalPrice)}`, `buy_now_${product._id}`)]);
+    const oldPriceStr = strikeThrough(formatRupiah(product.price));
+    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} ${oldPriceStr} ➡️ ${formatRupiah(finalPrice)}`, `buy_now_${product._id}`)]);
   } else {
     buttons.push([Markup.button.callback(`🛒 Beli ${product.name} - ${formatRupiah(product.price)}`, `buy_now_${product._id}`)]);
   }
