@@ -491,6 +491,37 @@ async function runMarketingCampaign(bot) {
 // Fungsi helper delay (agar tidak spam rate limit)
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
+// Fungsi publik untuk tes marketing output
+async function sendTestMarketing(bot, userId, type) {
+  const hType = await getSetting("header_type", "url");
+  const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
+  
+  const allProducts = await Product.find({ active: 1 }).lean();
+  let defaultProduct = allProducts.length > 0 ? allProducts[0] : { _id: "dummy", name: "Produk Contoh", price: 50000 };
+  let keyboard = buildProductMarkup(defaultProduct);
+
+  let msg = '';
+
+  if (type === 'cold_lead') {
+    msg = await getMsg('cold_lead', '\u{1F44B} *Hei! Belum nyobain Akses VIP kami?*\n\nRibuan orang sudah bergabung dan menikmati konten J-SUB premium setiap hari.\nSekali beli \u2014 nikmati selamanya. Tanpa biaya langganan! \u{1F389}\n\nKlik /start sekarang! \u{1F680}');
+  } else if (type === 'cart_abandon') {
+    msg = await getMsg('cart_abandon', '\u{1F6D2} *Tinggal 1 Langkah Lagi!*\n\nHai, sepertinya transaksi VIP-mu belum selesai.\nAkses ratusan film/scene siap menantimu. Jangan ragu, koleksi akan terus diupdate secara otomatis!\n\nKlik /start lalu selesaikan pembayaranmu sekarang ya. \u{1F525}');
+  } else if (type === 'inactive') {
+    msg = await getMsg('inactive', '\u{1F440} *Udah lama nih gak kelihatan!*\n\nKami punya banyak koleksi J-SUB terbaru lho. Sayang banget kalau kamu kelewatan.\n\nKlik /start sekarang dan cek katalog terbaru kami! \u2728');
+  } else if (type === 'cross_sell') {
+    const msgTemplate = await getMsg('cross_sell', '\u{1F389} *Hei {nama}!*\n\nKamu sudah punya akses *{produk_lama}* \u2014 pilihan yang tepat! \u{1F44D}\n\nTapi tahukah kamu kami juga punya *{produk_baru}*?\n\nSama-sama *VIP Permanen* \u2014 sekali beli, nikmati selamanya!\n\nKlik /start untuk lihat dan langsung order! \u{1F525}');
+    msg = msgTemplate.replace('{nama}', 'Bos').replace('{produk_lama}', 'VIP Basic').replace('{produk_baru}', defaultProduct.name);
+  } else if (type === 'stage2') {
+    msg = `\u23F0 *Hei Bos!*\n\nMasih ingat *${defaultProduct.name}* yang kami tawarkan beberapa hari lalu?\n\nPenawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\nKlik /start sekarang sebelum terlambat! \u{1F525}`;
+  } else if (type === 'stage3') {
+    msg = `\u{1F514} *Bos! Ini reminder terakhir dari kami.*\n\nKami tahu kamu tertarik dengan *${defaultProduct.name}*.\n\nSebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\nKlik /start sekarang untuk klaim diskon otomatismu! \u{1F381}`;
+  } else {
+    return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
+  }
+
+  return await sendSafe(bot, userId, `[TEST MODE]\n\n${msg}`, { media: hFile, mediaType: hType, keyboard });
+}
+
 function startCron(bot) {
   if (cronTimer) clearInterval(cronTimer);
 
@@ -530,6 +561,7 @@ function stopDailyCron() {
 module.exports = {
   startCron,
   runMarketingCampaign,
+  sendTestMarketing,
   markDripConverted,
   setMarketingEnabled,
   isMarketingEnabled,
