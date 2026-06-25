@@ -16,7 +16,8 @@ const UserSchema = new mongoose.Schema({
   purchase_count: { type: Number, default: 0 },
   is_blocked: { type: Boolean, default: false },
   source_ref: String,
-  last_broadcast_at: { type: Date, default: null } // Kapan terakhir dapat pesan marketing otomatis (anti-spam 3 hari)
+  last_broadcast_at: { type: Date, default: null }, // Kapan terakhir dapat pesan marketing otomatis (anti-spam 3 hari)
+  last_menu_msg_id: { type: Number, default: null } // Menyimpan ID pesan menu utama terakhir
 });
 
 const ProductSchema = new mongoose.Schema({

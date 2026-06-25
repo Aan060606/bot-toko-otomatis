@@ -1402,6 +1402,7 @@ bot.action("admin_stocks", async (ctx) => {
 
 // ======== STORE LOGIC ========
 bot.start(async (ctx) => {
+  try { await ctx.deleteMessage(); } catch (e) {}
   await trackEvent(ctx.from.id, 'START');
   ctx.session = {};
   return showStoreMenu(ctx);
@@ -1414,6 +1415,13 @@ bot.action("menu_main", async (ctx) => {
 });
 
 async function showStoreMenu(ctx) {
+  const userId = ctx.from.id;
+  const user = await User.findById(userId).lean();
+
+  if (user && user.last_menu_msg_id) {
+    try { await ctx.telegram.deleteMessage(ctx.chat.id, user.last_menu_msg_id); } catch (e) {}
+  }
+
   const products = await store.getActiveProducts();
   const text = `⛩️ 𝐉-𝐒𝐔𝐁 𝐂𝐎𝐋𝐋𝐄𝐂𝐓𝐈𝐎𝐍 𝐎𝐟𝐟𝐢𝐜𝐢𝐚𝐥 𝐇𝐮𝐛 ⛩️\n「 プレミアムアクセス • 𝑷𝒓𝒆𝒎𝒊𝒖𝒎 𝑨𝒄𝒄𝒆𝒔𝒔 」\n\nSilakan pilih lisensi VIP Anda di bawah ini ⚜️:\n\n_24/7 ON SIAP MELAYANI_`;
   const buttons = [];
@@ -1432,16 +1440,15 @@ async function showStoreMenu(ctx) {
   const hType = await store.getSetting("header_type", "url");
   const hFile = await store.getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
   
-  if (hType === "photo") {
-    return ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
-  } else if (hType === "animation") {
-    return ctx.replyWithAnimation(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+  let sentMsg;
+  if (hType === "photo" || (hType === "url" && hFile.match(/\.(jpeg|jpg|png)$/i))) {
+    sentMsg = await ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
   } else {
-    if (hFile.match(/\.(jpeg|jpg|png)$/i)) {
-      return ctx.replyWithPhoto(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
-    }
-    return ctx.replyWithAnimation(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
+    sentMsg = await ctx.replyWithAnimation(hFile, { caption: text, parse_mode: "Markdown", ...keyboard });
   }
+  
+  await User.findByIdAndUpdate(userId, { last_menu_msg_id: sentMsg.message_id });
+  return sentMsg;
 }
 
 bot.action(/^buy_now_(.+)$/, async (ctx) => {
@@ -1509,6 +1516,7 @@ bot.on('text', async (ctx, next) => {
   
   // Jika ini bukan perintah command (tidak berawalan /)
   if (!ctx.message.text.startsWith('/')) {
+    try { await ctx.deleteMessage(); } catch (e) {}
     await trackEvent(ctx.from.id, 'START');
     ctx.session = {};
     return showStoreMenu(ctx);
