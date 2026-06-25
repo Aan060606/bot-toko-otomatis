@@ -123,23 +123,24 @@ async function classifyNonBuyer(user) {
 
 async function runNonBuyerCampaign(bot) {
   const msgCartAbandon = await getMsg('cart_abandon',
-    '\u{1F6D2} *Selesaikan Transaksi VIP-mu!*\n\n' +
-    'Jangan lewatkan akses ratusan koleksi eksklusif yang terus diupdate otomatis.\n\n' +
-    'Klik tombol **Beli** di bawah untuk lanjut bayar \u{1F447}'
+    '\u26A0\uFE0F \u{1D41F}\u{1D404}\u{1D40D}\u{1D403}\u{1D408}\u{1D40D}\u{1D406} \u{1D413}\u{1D411}\u{1D400}\u{1D40D}\u{1D412}\u{1D400}\u{1D402}\u{1D413}\u{1D408}\u{1D40E}\u{1D40D}\n\n' +
+    'Akses eksklusif Anda hampir siap. Jangan biarkan koleksi ratusan mahakarya ini tertunda.\n\n' +
+    'Lanjutkan pembayaran Anda dengan aman melalui tombol di bawah \u{1F447}'
   );
 
   const msgInactive = await getMsg('inactive',
-    '\u{1F440} *Koleksi J-SUB Terbaru Rilis!*\n\n' +
-    'Banyak konten panas yang kamu lewatkan minggu ini. Jangan sampai ketinggalan!\n\n' +
-    'Buka akses VIP-mu sekarang \u{1F447}'
+    '\u2728 \u{1D40D}\u{1D404}\u{1D416} \u{1D402}\u{1D40E}\u{1D40B}\u{1D40B}\u{1D404}\u{1D402}\u{1D413}\u{1D408}\u{1D40E}\u{1D40D} \u{1D400}\u{1D40B}\u{1D404}\u{1D411}\u{1D413}\n\n' +
+    'Katalog eksklusif kami baru saja diperbarui dengan ratusan mahakarya terbaru minggu ini.\n\n' +
+    'Kembali dan temukan koleksi terhangat sekarang \u{1F447}'
   );
 
   const msgColdLead = await getMsg('cold_lead',
-    '\u{1F44B} *Akses VIP J-SUB Menantimu!*\n\n' +
-    '\u2705 Ribuan konten update otomatis\n' +
-    '\u2705 Sekali bayar, aktif selamanya\n' +
-    '\u2705 Bebas biaya bulanan\n\n' +
-    'Amankan aksesmu sekarang! \u{1F447}'
+    '\u269C\uFE0F \u{1D409}-\u{1D412}\u{1D414}\u{1D401} \u{1D40F}\u{1D411}\u{1D404}\u{1D40C}\u{1D408}\u{1D414}\u{1D40C} \u{1D400}\u{1D402}\u{1D402}\u{1D404}\u{1D412}\u{1D412} \u269C\uFE0F\n\n' +
+    'Tingkatkan pengalaman Anda dengan koleksi terlengkap dan terkurasi. Ribuan pengguna telah bergabung dalam lingkaran eksklusif kami.\n\n' +
+    '\u2726 Akses Instan & Permanen\n' +
+    '\u2726 Update Otomatis Setiap Hari\n' +
+    '\u2726 Tanpa Biaya Berlangganan\n\n' +
+    'Amankan akses VIP Anda sekarang \u{1F447}'
   );
 
   const nonBuyers = await User.find({ 
@@ -280,11 +281,11 @@ async function runCrossSellCampaign(bot, allProducts) {
   if (allProducts.length < 2) return { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
   const msgTemplate = await getMsg('cross_sell',
-    '\u{1F389} *Upgrade Aksesmu, {nama}!*\n\n' +
-    'Punya *{produk_lama}* aja gak cukup! Koleksi *{produk_baru}* sudah menanti.\n\n' +
-    '\u2705 VIP Permanen\n' +
-    '\u2705 Update Otomatis\n\n' +
-    'Sikat sekarang sebelum harga naik \u{1F447}'
+    '\u{1F451} \u{1D404}\u{1D417}\u{1D402}\u{1D40B}\u{1D414}\u{1D412}\u{1D408}\u{1D415}\u{1D404} \u{1D414}\u{1D40F}\u{1D406}\u{1D411}\u{1D400}\u{1D403}\u{1D404}\n\n' +
+    'Halo {nama},\nSebagai pemegang akses *{produk_lama}*, Anda kini berhak membuka gerbang menuju koleksi tingkat lanjut: *{produk_baru}*.\n\n' +
+    '\u2726 Akses Penuh tanpa Batas\n' +
+    '\u2726 Tersinkronisasi Otomatis\n\n' +
+    'Tingkatkan level Anda sekarang \u{1F447}'
   );
 
   const partialBuyers = await User.find({ purchase_count: { $gt: 0 }, is_blocked: { $ne: true } }).lean();
@@ -377,9 +378,10 @@ async function runDripFollowUp(bot) {
     const productName = product ? product.name : 'produk pilihan kami';
 
     const msg =
-      `\u23F0 *Penawaran Mau Habis, ${user.first_name || 'Bos'}!*\n\n` +
-      `Akses *${productName}* tinggal selangkah lagi. Jangan biarkan koleksi eksklusif ini terlewat.\n\n` +
-      `Amankan slotmu sekarang \u{1F447}`;
+      `\u23F3 \u{1D40B}\u{1D408}\u{1D40C}\u{1D408}\u{1D413}\u{1D404}\u{1D403} \u{1D413}\u{1D408}\u{1D40C}\u{1D404} \u{1D40E}\u{1D405}\u{1D405}\u{1D404}\u{1D411}\n\n` +
+      `Halo ${user.first_name || 'VIP'},\nKesempatan untuk mengakses *${productName}* hampir berakhir. ` +
+      `Jangan lewatkan mahakarya eksklusif ini sebelum penawaran ditutup.\n\n` +
+      `Amankan slot Anda segera \u{1F447}`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
@@ -437,10 +439,12 @@ async function runDripFollowUp(bot) {
     });
 
     const msg =
-      `\u{1F381} *Kupon Diskon Khusus Untukmu!*\n\n` +
-      `${user.first_name || 'Bos'}, potongan *Rp5.000* sudah otomatis aktif untuk *${productName}*!\n\n` +
-      `\u23F3 *Berlaku 24 Jam Saja!*\n\n` +
-      `Klaim diskonmu dengan klik tombol di bawah \u{1F447}`;
+      `\u{1F48E} \u{1D405}\u{1D408}\u{1D40D}\u{1D400}\u{1D40B} \u{1D402}\u{1D400}\u{1D40B}\u{1D40B} & \u{1D411}\u{1D404}\u{1D416}\u{1D400}\u{1D411}\u{1D403}\n\n` +
+      `Halo ${user.first_name || 'VIP'}, ini adalah panggilan terakhir.\n` +
+      `Sebagai bentuk apresiasi dari kami, nikmati *Potongan Eksklusif Rp5.000* untuk mengklaim *${productName}*.\n\n` +
+      `\u27DF Potongan otomatis aktif saat checkout\n` +
+      `\u27DF Hanya berlaku dalam 24 Jam\n\n` +
+      `Klaim keistimewaan Anda sekarang \u{1F447}`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product, 5000);
@@ -517,18 +521,18 @@ async function sendTestMarketing(bot, userId, type) {
   let msg = '';
 
   if (type === 'cold_lead') {
-    msg = await getMsg('cold_lead', '\u{1F44B} *Akses VIP J-SUB Menantimu!*\n\n\u2705 Ribuan konten update otomatis\n\u2705 Sekali bayar, aktif selamanya\n\u2705 Bebas biaya bulanan\n\nAmankan aksesmu sekarang! \u{1F447}');
+    msg = await getMsg('cold_lead', '\u269C\uFE0F \u{1D409}-\u{1D412}\u{1D414}\u{1D401} \u{1D40F}\u{1D411}\u{1D404}\u{1D40C}\u{1D408}\u{1D414}\u{1D40C} \u{1D400}\u{1D402}\u{1D402}\u{1D404}\u{1D412}\u{1D412} \u269C\uFE0F\n\nTingkatkan pengalaman Anda dengan koleksi terlengkap dan terkurasi. Ribuan pengguna telah bergabung dalam lingkaran eksklusif kami.\n\n\u2726 Akses Instan & Permanen\n\u2726 Update Otomatis Setiap Hari\n\u2726 Tanpa Biaya Berlangganan\n\nAmankan akses VIP Anda sekarang \u{1F447}');
   } else if (type === 'cart_abandon') {
-    msg = await getMsg('cart_abandon', '\u{1F6D2} *Selesaikan Transaksi VIP-mu!*\n\nJangan lewatkan akses ratusan koleksi eksklusif yang terus diupdate otomatis.\n\nKlik tombol **Beli** di bawah untuk lanjut bayar \u{1F447}');
+    msg = await getMsg('cart_abandon', '\u26A0\uFE0F \u{1D41F}\u{1D404}\u{1D40D}\u{1D403}\u{1D408}\u{1D40D}\u{1D406} \u{1D413}\u{1D411}\u{1D400}\u{1D40D}\u{1D412}\u{1D400}\u{1D402}\u{1D413}\u{1D408}\u{1D40E}\u{1D40D}\n\nAkses eksklusif Anda hampir siap. Jangan biarkan koleksi ratusan mahakarya ini tertunda.\n\nLanjutkan pembayaran Anda dengan aman melalui tombol di bawah \u{1F447}');
   } else if (type === 'inactive') {
-    msg = await getMsg('inactive', '\u{1F440} *Koleksi J-SUB Terbaru Rilis!*\n\nBanyak konten panas yang kamu lewatkan minggu ini. Jangan sampai ketinggalan!\n\nBuka akses VIP-mu sekarang \u{1F447}');
+    msg = await getMsg('inactive', '\u2728 \u{1D40D}\u{1D404}\u{1D416} \u{1D402}\u{1D40E}\u{1D40B}\u{1D40B}\u{1D404}\u{1D402}\u{1D413}\u{1D408}\u{1D40E}\u{1D40D} \u{1D400}\u{1D40B}\u{1D404}\u{1D411}\u{1D413}\n\nKatalog eksklusif kami baru saja diperbarui dengan ratusan mahakarya terbaru minggu ini.\n\nKembali dan temukan koleksi terhangat sekarang \u{1F447}');
   } else if (type === 'cross_sell') {
-    const msgTemplate = await getMsg('cross_sell', '\u{1F389} *Upgrade Aksesmu, {nama}!*\n\nPunya *{produk_lama}* aja gak cukup! Koleksi *{produk_baru}* sudah menanti.\n\n\u2705 VIP Permanen\n\u2705 Update Otomatis\n\nSikat sekarang sebelum harga naik \u{1F447}');
-    msg = msgTemplate.replace('{nama}', 'Bos').replace('{produk_lama}', 'VIP Basic').replace('{produk_baru}', defaultProduct.name);
+    const msgTemplate = await getMsg('cross_sell', '\u{1F451} \u{1D404}\u{1D417}\u{1D402}\u{1D40B}\u{1D414}\u{1D412}\u{1D408}\u{1D415}\u{1D404} \u{1D414}\u{1D40F}\u{1D406}\u{1D411}\u{1D400}\u{1D403}\u{1D404}\n\nHalo {nama},\nSebagai pemegang akses *{produk_lama}*, Anda kini berhak membuka gerbang menuju koleksi tingkat lanjut: *{produk_baru}*.\n\n\u2726 Akses Penuh tanpa Batas\n\u2726 Tersinkronisasi Otomatis\n\nTingkatkan level Anda sekarang \u{1F447}');
+    msg = msgTemplate.replace('{nama}', 'VIP').replace('{produk_lama}', 'VIP Basic').replace('{produk_baru}', defaultProduct.name);
   } else if (type === 'stage2') {
-    msg = `\u23F0 *Penawaran Mau Habis, Bos!*\n\nAkses *${defaultProduct.name}* tinggal selangkah lagi. Jangan biarkan koleksi eksklusif ini terlewat.\n\nAmankan slotmu sekarang \u{1F447}`;
+    msg = `\u23F3 \u{1D40B}\u{1D408}\u{1D40C}\u{1D408}\u{1D413}\u{1D404}\u{1D403} \u{1D413}\u{1D408}\u{1D40C}\u{1D404} \u{1D40E}\u{1D405}\u{1D405}\u{1D404}\u{1D411}\n\nHalo VIP,\nKesempatan untuk mengakses *${defaultProduct.name}* hampir berakhir. Jangan lewatkan mahakarya eksklusif ini sebelum penawaran ditutup.\n\nAmankan slot Anda segera \u{1F447}`;
   } else if (type === 'stage3') {
-    msg = `\u{1F381} *Kupon Diskon Khusus Untukmu!*\n\nBos, potongan *Rp5.000* sudah otomatis aktif untuk *${defaultProduct.name}*!\n\n\u23F3 *Berlaku 24 Jam Saja!*\n\nKlaim diskonmu dengan klik tombol di bawah \u{1F447}`;
+    msg = `\u{1F48E} \u{1D405}\u{1D408}\u{1D40D}\u{1D400}\u{1D40B} \u{1D402}\u{1D400}\u{1D40B}\u{1D40B} & \u{1D411}\u{1D404}\u{1D416}\u{1D400}\u{1D411}\u{1D403}\n\nHalo VIP, ini adalah panggilan terakhir.\nSebagai bentuk apresiasi dari kami, nikmati *Potongan Eksklusif Rp5.000* untuk mengklaim *${defaultProduct.name}*.\n\n\u27DF Potongan otomatis aktif saat checkout\n\u27DF Hanya berlaku dalam 24 Jam\n\nKlaim keistimewaan Anda sekarang \u{1F447}`;
     keyboard = buildProductMarkup(defaultProduct, 5000);
   } else {
     return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
