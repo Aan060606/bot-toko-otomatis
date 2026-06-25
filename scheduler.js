@@ -123,22 +123,22 @@ async function classifyNonBuyer(user) {
 
 async function runNonBuyerCampaign(bot) {
   const msgCartAbandon = await getMsg('cart_abandon',
-    '\u{1F6D2} *Selesaikan Transaksi {produk}!*\n\n' +
-    '\u2705 Jangan lewatkan update terbaru\n\n' +
-    '\u{1F447} Lanjut bayar di bawah'
+    '\u26A0\uFE0F *Selesaikan Transaksi {produk}*\n\n' +
+    '\u27DF Jangan lewatkan update terbaru\n\n' +
+    '\u{1F447} Lanjut di bawah'
   );
 
   const msgInactive = await getMsg('inactive',
-    '\u2728 *Koleksi {produk} Terbaru Rilis!*\n\n' +
-    '\u2705 Ratusan update panas minggu ini\n\n' +
+    '\u2728 *Koleksi {produk} Rilis!*\n\n' +
+    '\u27DF Ratusan update panas minggu ini\n\n' +
     '\u{1F447} Cek sekarang'
   );
 
   const msgColdLead = await getMsg('cold_lead',
-    '\u{1F525} *Akses {produk} Menantimu!*\n\n' +
-    '\u2705 Ribuan konten update tiap hari\n' +
-    '\u2705 Sekali bayar, aktif selamanya\n\n' +
-    '\u{1F447} Sikat sekarang!'
+    '\u269C\uFE0F *Akses {produk} Menantimu* \u269C\uFE0F\n\n' +
+    '\u27DF Ribuan konten update tiap hari\n' +
+    '\u27DF Sekali bayar, aktif selamanya\n\n' +
+    '\u{1F447} Amankan sekarang'
   );
 
   const nonBuyers = await User.find({ 
@@ -283,10 +283,10 @@ async function runCrossSellCampaign(bot, allProducts) {
   if (allProducts.length < 2) return { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
   const msgTemplate = await getMsg('cross_sell',
-    '\u{1F451} *Upgrade ke {produk_baru}!*\n\n' +
+    '\u{1F451} *Upgrade ke {produk_baru}!*\n' +
     'Punya {produk_lama} belum cukup.\n\n' +
-    '\u2705 VIP Permanen\n' +
-    '\u2705 Update Otomatis\n\n' +
+    '\u27DF VIP Permanen\n' +
+    '\u27DF Update Otomatis\n\n' +
     '\u{1F447} Order sekarang'
   );
 
@@ -381,7 +381,7 @@ async function runDripFollowUp(bot) {
 
     const msg =
       `\u23F3 *Promo ${productName} Mau Habis!*\n\n` +
-      `\u2705 Slot terbatas\n\n` +
+      `\u27DF Slot sangat terbatas\n\n` +
       `\u{1F447} Amankan segera`;
 
     let keyboard = null;
@@ -441,8 +441,8 @@ async function runDripFollowUp(bot) {
 
     const msg =
       `\u{1F48E} *Diskon Rp5.000 Khusus ${productName}!*\n\n` +
-      `\u2705 Potongan otomatis (24 Jam)\n\n` +
-      `\u{1F447} Klaim sekarang`;
+      `\u27DF Potongan otomatis (24 Jam)\n\n` +
+      `\u{1F447} Klaim diskon sekarang`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product, 5000);
@@ -519,21 +519,21 @@ async function sendTestMarketing(bot, userId, type) {
   let msg = '';
 
   if (type === 'cold_lead') {
-    msg = await getMsg('cold_lead', '\u{1F525} *Akses {produk} Menantimu!*\n\n\u2705 Ribuan konten update tiap hari\n\u2705 Sekali bayar, aktif selamanya\n\n\u{1F447} Sikat sekarang!');
+    msg = await getMsg('cold_lead', '\u269C\uFE0F *Akses {produk} Menantimu* \u269C\uFE0F\n\n\u27DF Ribuan konten update tiap hari\n\u27DF Sekali bayar, aktif selamanya\n\n\u{1F447} Amankan sekarang');
     msg = msg.replace(/\{produk\}/g, defaultProduct.name);
   } else if (type === 'cart_abandon') {
-    msg = await getMsg('cart_abandon', '\u{1F6D2} *Selesaikan Transaksi {produk}!*\n\n\u2705 Jangan lewatkan update terbaru\n\n\u{1F447} Lanjut bayar di bawah');
+    msg = await getMsg('cart_abandon', '\u26A0\uFE0F *Selesaikan Transaksi {produk}*\n\n\u27DF Jangan lewatkan update terbaru\n\n\u{1F447} Lanjut di bawah');
     msg = msg.replace(/\{produk\}/g, defaultProduct.name);
   } else if (type === 'inactive') {
-    msg = await getMsg('inactive', '\u2728 *Koleksi {produk} Terbaru Rilis!*\n\n\u2705 Ratusan update panas minggu ini\n\n\u{1F447} Cek sekarang');
+    msg = await getMsg('inactive', '\u2728 *Koleksi {produk} Rilis!*\n\n\u27DF Ratusan update panas minggu ini\n\n\u{1F447} Cek sekarang');
     msg = msg.replace(/\{produk\}/g, defaultProduct.name);
   } else if (type === 'cross_sell') {
-    const msgTemplate = await getMsg('cross_sell', '\u{1F451} *Upgrade ke {produk_baru}!*\n\nPunya {produk_lama} belum cukup.\n\n\u2705 VIP Permanen\n\u2705 Update Otomatis\n\n\u{1F447} Order sekarang');
+    const msgTemplate = await getMsg('cross_sell', '\u{1F451} *Upgrade ke {produk_baru}!*\nPunya {produk_lama} belum cukup.\n\n\u27DF VIP Permanen\n\u27DF Update Otomatis\n\n\u{1F447} Order sekarang');
     msg = msgTemplate.replace('{produk_lama}', 'VIP Basic').replace('{produk_baru}', defaultProduct.name);
   } else if (type === 'stage2') {
-    msg = `\u23F3 *Promo ${defaultProduct.name} Mau Habis!*\n\n\u2705 Slot terbatas\n\n\u{1F447} Amankan segera`;
+    msg = `\u23F3 *Promo ${defaultProduct.name} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
   } else if (type === 'stage3') {
-    msg = `\u{1F48E} *Diskon Rp5.000 Khusus ${defaultProduct.name}!*\n\n\u2705 Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim sekarang`;
+    msg = `\u{1F48E} *Diskon Rp5.000 Khusus ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
     keyboard = buildProductMarkup(defaultProduct, 5000);
   } else {
     return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
