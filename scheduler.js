@@ -39,12 +39,18 @@ async function getMsg(key, defaultMsg) {
   return await getSetting('marketing_' + key, defaultMsg);
 }
 
-function buildProductMarkup(product) {
+function buildProductMarkup(product, discountAmount = 0) {
   const buttons = [];
   if (product.preview_url) {
     buttons.push([Markup.button.url(`📺 Preview Content ${product.name}`, product.preview_url)]);
   }
-  buttons.push([Markup.button.callback(`🛒 Beli ${product.name} - ${formatRupiah(product.price)}`, `buy_now_${product._id}`)]);
+  
+  if (discountAmount > 0 && product.price > discountAmount) {
+    const finalPrice = product.price - discountAmount;
+    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} (Diskon!) - ${formatRupiah(finalPrice)}`, `buy_now_${product._id}`)]);
+  } else {
+    buttons.push([Markup.button.callback(`🛒 Beli ${product.name} - ${formatRupiah(product.price)}`, `buy_now_${product._id}`)]);
+  }
   return Markup.inlineKeyboard(buttons);
 }
 
@@ -433,7 +439,7 @@ async function runDripFollowUp(bot) {
       `Klik tombol **Beli** di bawah sekarang untuk klaim diskon otomatismu! \u{1F381}`;
 
     let keyboard = null;
-    if (product) keyboard = buildProductMarkup(product);
+    if (product) keyboard = buildProductMarkup(product, 5000);
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
@@ -519,6 +525,7 @@ async function sendTestMarketing(bot, userId, type) {
     msg = `\u23F0 *Hei Bos!*\n\nMasih ingat *${defaultProduct.name}* yang kami tawarkan beberapa hari lalu?\n\nPenawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\nKlik tombol **Beli** di bawah sekarang sebelum terlambat! \u{1F525}`;
   } else if (type === 'stage3') {
     msg = `\u{1F514} *Bos! Ini reminder terakhir dari kami.*\n\nKami tahu kamu tertarik dengan *${defaultProduct.name}*.\n\nSebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\nKlik tombol **Beli** di bawah sekarang untuk klaim diskon otomatismu! \u{1F381}`;
+    keyboard = buildProductMarkup(defaultProduct, 5000);
   } else {
     return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
   }
