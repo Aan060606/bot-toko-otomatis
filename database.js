@@ -100,10 +100,18 @@ const DripLogSchema = new mongoose.Schema({
   stage: { type: Number, default: 1 },           // Tahap saat ini: 1 (awal), 2 (urgensi), 3 (final)
   sent_at: { type: Date, default: Date.now },    // Kapan pesan tahap ini dikirim
   converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
+  variant: { type: String, enum: ['A', 'B'] },   // Untuk A/B Testing
   created_at: { type: Date, default: Date.now }
 });
-// TTL 30 hari agar log lama terhapus otomatis
-DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+// TTL 90 hari khusus untuk log yang sudah converted
+DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60, partialFilterExpression: { converted: true } });
+
+const ABTestResultSchema = new mongoose.Schema({
+  variant: { type: String, enum: ['A', 'B'] },
+  stage: Number,
+  converted: { type: Boolean, default: false },
+  created_at: { type: Date, default: Date.now }
+});
 
 const BroadcastLogSchema = new mongoose.Schema({
   admin_id: Number,
@@ -126,5 +134,6 @@ module.exports = {
   UserEvent: mongoose.model('UserEvent', UserEventSchema),
   Discount: mongoose.model('Discount', DiscountSchema),
   DripLog: mongoose.model('DripLog', DripLogSchema),
-  BroadcastLog: mongoose.model('BroadcastLog', BroadcastLogSchema)
+  BroadcastLog: mongoose.model('BroadcastLog', BroadcastLogSchema),
+  ABTestResult: mongoose.model('ABTestResult', ABTestResultSchema)
 };

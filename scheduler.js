@@ -19,7 +19,7 @@
  * Template  : Bisa diubah Admin via /set_msg
  */
 
-const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount } = require('./database');
+const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult } = require('./database');
 const { Markup } = require('telegraf');
 
 const formatRupiah = (angka) => 'Rp' + angka.toLocaleString('id-ID');
@@ -59,7 +59,7 @@ function buildProductMarkup(product, discountAmount = 0) {
   return Markup.inlineKeyboard(buttons);
 }
 
-function calculateDynamicDiscount(user) {
+async function calculateDynamicDiscount(user) {
   const daysSinceJoin = (Date.now() - new Date(user.joined_at)) / (1000 * 60 * 60 * 24);
   const purchaseCount = user.purchase_count || 0;
   const totalSpent = user.total_spent || 0;
@@ -67,12 +67,25 @@ function calculateDynamicDiscount(user) {
   if (totalSpent > 100000 || purchaseCount >= 5) {
     return { percentage: 10, title: 'Khusus Member VIP' };
   }
+  
   if (purchaseCount === 0 && daysSinceJoin > 30) {
+    const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const prevBigDiscounts = await Discount.countDocuments({
+      target_user_id: user._id,
+      type: 'PERCENTAGE',
+      value: { $gte: 25 },
+      created_at: { $gte: ninetyDaysAgo }
+    });
+    
+    if (prevBigDiscounts >= 2) return { percentage: 25, title: 'Spesial Comeback 25%' };
+    if (prevBigDiscounts === 1) return { percentage: 35, title: 'Spesial Comeback 35%' };
     return { percentage: 50, title: 'Spesial Comeback 50%' };
   }
-  if (purchaseCount === 0) {
+  
+  if (purchaseCount === 0 && daysSinceJoin <= 30) {
     return { percentage: 20, title: 'Diskon Khusus 20%' };
   }
+  
   return { percentage: 15, title: 'Promo Pelanggan Setia' };
 }
 
@@ -216,7 +229,8 @@ async function runNonBuyerCampaign(bot) {
             product_id: String(defaultProduct._id),
             campaign_type: 'NON_BUYER',
             stage: 1,
-            sent_at: new Date()
+            sent_at: new Date(),
+            variant: Math.random() > 0.5 ? 'A' : 'B'
           });
         }
       }
@@ -352,7 +366,8 @@ async function runCrossSellCampaign(bot, allProducts) {
           product_id: String(targetProduct._id),
           campaign_type: 'CROSS_SELL',
           stage: 1,
-          sent_at: new Date()
+          sent_at: new Date(),
+          variant: Math.random() > 0.5 ? 'A' : 'B'
         });
       }
 
@@ -389,6 +404,8 @@ async function runDripFollowUp(bot) {
       continue;
     }
 
+    if (isInCooldown(user)) continue;
+
     if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
       continue;
@@ -403,10 +420,9 @@ async function runDripFollowUp(bot) {
     const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
-    const msg =
-      `\u23F3 *Promo ${productName} Mau Habis!*\n\n` +
-      `\u27DF Slot sangat terbatas\n\n` +
-      `\u{1F447} Amankan segera`;
+    const msg = log.variant === 'B'
+      ? `\u26A0\uFE0F *Peringatan Terakhir, ${user.first_name || 'Bos'}!*\n\nPromo ${productName} akan ditutup.\n\n\u{1F447} Sikat sekarang`
+      : `\u23F3 *Promo ${productName} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
@@ -435,6 +451,8 @@ async function runDripFollowUp(bot) {
       continue;
     }
 
+    if (isInCooldown(user)) continue;
+
     if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
       continue;
@@ -449,7 +467,7 @@ async function runDripFollowUp(bot) {
     const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
-    const discountRule = calculateDynamicDiscount(user);
+    const discountRule = await calculateDynamicDiscount(user);
     const discountAmount = product ? Math.floor(product.price * (discountRule.percentage / 100)) : 5000;
 
     // Buat diskon khusus untuk user ini saja, berlaku 24 jam
@@ -466,10 +484,9 @@ async function runDripFollowUp(bot) {
       active: true
     });
 
-    const msg =
-      `\u{1F48E} *${discountRule.title} ${productName}!*\n\n` +
-      `\u27DF Potongan otomatis (24 Jam)\n\n` +
-      `\u{1F447} Klaim diskon sekarang`;
+    const msg = log.variant === 'B'
+      ? `\u{1F381} *Kejutan ${discountRule.title}*\n\nBerlaku untuk ${productName} hari ini saja.\n\n\u{1F447} Ambil diskonmu`
+      : `\u{1F48E} *${discountRule.title} ${productName}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product, discountAmount);
@@ -502,6 +519,8 @@ async function runDripFollowUp(bot) {
           await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
           continue;
         }
+
+        if (isInCooldown(user)) continue;
 
         // Kalau ternyata user udah punya produk termurah ini
         const boughtIds = await getBoughtProductIds(user._id);
@@ -537,10 +556,18 @@ async function runDripFollowUp(bot) {
 // Dipanggil dari store.js saat fulfillOrder
 async function markDripConverted(userId) {
   try {
-    await DripLog.updateMany(
-      { user_id: userId, converted: false },
-      { $set: { converted: true } }
-    );
+    const logs = await DripLog.find({ user_id: userId, converted: false }).lean();
+    for (const log of logs) {
+      await DripLog.findByIdAndUpdate(log._id, { converted: true });
+      if (log.variant) {
+        await ABTestResult.create({
+          variant: log.variant,
+          stage: log.stage,
+          converted: true,
+          created_at: new Date()
+        });
+      }
+    }
   } catch (e) { /* silent */ }
 }
 
@@ -557,6 +584,9 @@ async function runMarketingCampaign(bot) {
   console.log('[MARKETING] Campaign 1: Non-Buyer...');
   const nonBuyerStats = await runNonBuyerCampaign(bot);
 
+  console.log('[MARKETING] Campaign VIP Win-Back...');
+  const vipCount = await runVIPWinBackCampaign(bot);
+
   const allProducts = await Product.find({ active: 1 }).lean();
 
   console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
@@ -570,6 +600,7 @@ async function runMarketingCampaign(bot) {
     complete: crossSellStats.complete,
     stage2: dripStats.stage2,
     stage3: dripStats.stage3,
+    vipWinBack: vipCount,
     skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped,
     failed: nonBuyerStats.failed + crossSellStats.failed + dripStats.failed
   };
@@ -607,8 +638,8 @@ async function sendTestMarketing(bot, userId, type) {
     msg = `\u23F3 *Promo ${defaultProduct.name} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
   } else if (type === 'stage3') {
     // Simulasi untuk test marketing (misalnya profil Dead Lead)
-    const mockUser = { joined_at: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000), purchase_count: 0, total_spent: 0 };
-    const discountRule = calculateDynamicDiscount(mockUser);
+    const mockUser = { _id: 1, joined_at: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000), purchase_count: 0, total_spent: 0 };
+    const discountRule = await calculateDynamicDiscount(mockUser);
     const discountAmount = Math.floor(defaultProduct.price * (discountRule.percentage / 100));
     
     msg = `\u{1F48E} *${discountRule.title} ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
@@ -620,6 +651,60 @@ async function sendTestMarketing(bot, userId, type) {
   }
 
   return await sendSafe(bot, userId, `[TEST MODE]\n\n${msg}`, { media: hFile, mediaType: hType, keyboard });
+}
+
+// ─── VIP WIN-BACK ────────────────────────────────────────────────────────────
+async function runVIPWinBackCampaign(bot) {
+  let count = 0;
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  
+  const vips = await User.find({
+    $or: [{ total_spent: { $gt: 100000 } }, { purchase_count: { $gte: 5 } }],
+    last_active_at: { $lte: fourteenDaysAgo, $gte: sixtyDaysAgo },
+    is_blocked: { $ne: true }
+  }).lean();
+
+  for (const user of vips) {
+    if (isInCooldown(user)) continue;
+    
+    const msg = `\u{1F44B} *Halo ${user.first_name || 'VIP'}!*\n\nLama tak jumpa. Kami di sini sangat merindukan kehadiran Anda.\n\nJika Anda butuh sesuatu atau ada kendala, jangan ragu untuk membalas pesan ini langsung.\n\nSemoga hari Anda menyenangkan!`;
+    const result = await sendSafe(bot, user._id, msg);
+    if (result.ok) count++;
+    await delay(1500);
+  }
+  return count;
+}
+
+// ─── DASHBOARD METRICS ───────────────────────────────────────────────────────
+async function getCampaignMetrics() {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const dripStats = await DripLog.aggregate([
+    { $match: { created_at: { $gte: startOfDay } } },
+    { $group: { _id: "$stage", total: { $sum: 1 }, converted: { $sum: { $cond: ["$converted", 1, 0] } } } }
+  ]);
+
+  const abStats = await ABTestResult.aggregate([
+    { $match: { created_at: { $gte: startOfDay } } },
+    { $group: { _id: "$variant", conversions: { $sum: 1 } } }
+  ]);
+
+  let msg = `\u{1F4CA} *Laporan Marketing Harian*\n\n`;
+  msg += `*Performa Drip (Dikirim Hari Ini)*\n`;
+  if (dripStats.length === 0) msg += `- Belum ada data\n`;
+  dripStats.forEach(s => {
+    msg += `Stage ${s._id}: ${s.total} terkirim, ${s.converted} konversi\n`;
+  });
+  
+  msg += `\n*A/B Test Konversi Hari Ini*\n`;
+  if (abStats.length === 0) msg += `- Belum ada data\n`;
+  abStats.forEach(s => {
+    msg += `Varian ${s._id}: ${s.conversions} konversi\n`;
+  });
+
+  return msg;
 }
 
 function startCron(bot) {
@@ -646,6 +731,19 @@ function startCron(bot) {
         }
       } catch (err) {
         console.error('[CRON] Gagal menjalankan marketing:', err);
+      }
+    }
+    
+    if (jakartaHour === 23 && lastCronDate !== today + '_metrics') {
+      lastCronDate = today + '_metrics';
+      try {
+        const adminId = process.env.ADMIN_ID;
+        if (adminId) {
+          const metricsMsg = await getCampaignMetrics();
+          await bot.telegram.sendMessage(adminId, metricsMsg, { parse_mode: 'Markdown' });
+        }
+      } catch (err) {
+        console.error('[CRON] Gagal kirim metrics harian:', err);
       }
     }
   }, 1000 * 60 * 60); // Cek setiap jam
