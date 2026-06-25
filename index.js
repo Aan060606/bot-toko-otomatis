@@ -1059,21 +1059,38 @@ bot.action(/broadcast_ui_(all|buyer|nonbuyer)/, async (ctx) => {
 bot.action("admin_discount", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
-  const text = `🎟️ *Manajemen Diskon Otomatis*\n\n` +
-    `Gunakan command berikut di chat ini:\n\n` +
-    `/discount\\_list\n_Lihat semua diskon aktif_\n\n` +
-    `/creatediscount <KODE> <FIXED/PERCENTAGE> <NILAI> <TRIGGER>\n_Buat diskon baru_\n\nContoh:\n` +
-    "`/creatediscount NEWUSER FIXED 5000 FIRST_TIME`\n" +
-    "`/creatediscount LOYAL PERCENTAGE 10 LOYALTY`\n" +
-    "`/creatediscount PROMO FIXED 10000 ALL`\n\n" +
-    `/deletediscount <KODE>\n_Hapus diskon_\n\n` +
-    `*Trigger tersedia:*\n` +
-    `• \`FIRST_TIME\` — User belum pernah beli\n` +
-    `• \`LOYALTY\` — User sudah beli 5x+\n` +
-    `• \`CART_ABANDON\` — User checkout 1 jam lalu tapi belum bayar\n` +
-    `• \`ALL\` — Semua user`;
-  const kb = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_main")]]);
+  const text = `🎟️ *Manajemen Diskon Otomatis*\n\nPilih aksi di bawah ini:`;
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("➕ Buat Diskon Baru", "discount_ui_create")],
+    [Markup.button.callback("📋 Daftar Diskon", "discount_ui_list")],
+    [Markup.button.callback("🔙 Kembali", "admin_main")]
+  ]);
   return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
+});
+
+bot.action("discount_ui_list", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const discounts = await Discount.find().lean();
+  if (discounts.length === 0) return ctx.reply("Belum ada diskon yang dibuat.");
+  
+  let text = `🎟️ *Daftar Diskon Otomatis*\n\n`;
+  discounts.forEach(d => {
+    text += `🔹 *${d.code}* [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
+    text += `Tipe: ${d.type} (${d.value}${d.type === 'PERCENTAGE' ? '%' : ' IDR'})\n`;
+    text += `Trigger: ${d.trigger_event || 'ALL'}\n`;
+    text += `Terpakai: ${d.used_count} / ${d.max_uses > 0 ? d.max_uses : 'Unlimited'}\n\n`;
+  });
+  return ctx.reply(text, { parse_mode: 'Markdown' });
+});
+
+bot.action("discount_ui_create", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_discount_create';
+  const text = `➕ *Buat Diskon Baru*\n\nKetik detail diskon dengan format (dipisah spasi):\n\`KODE TIPE NILAI TRIGGER\`\n\n*Contoh:*\n\`PROMO FIXED 5000 FIRST_TIME\`\n\`LOYAL PERCENTAGE 10 LOYALTY\`\n\`COMEBACK FIXED 10000 CART_ABANDON\`\n\n_(Atau ketik BATAL untuk membatalkan)_`;
+  return ctx.reply(text, { parse_mode: "Markdown" });
 });
 
 // Add Product flow
