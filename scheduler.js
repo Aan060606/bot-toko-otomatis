@@ -805,7 +805,16 @@ function startCron(bot) {
         console.error('[CRON] Gagal menjalankan marketing:', err);
       }
     }
-    
+    if (jakartaHour === 2 && lastCronDate !== today + '_backup') {
+      lastCronDate = today + '_backup';
+      try {
+        const { runDatabaseBackup } = require('./backup');
+        await runDatabaseBackup(bot);
+      } catch (err) {
+        console.error('[CRON] Gagal menjalankan backup:', err);
+      }
+    }
+
     if (jakartaHour === 3 && lastCronDate !== today + '_cleanup') {
       lastCronDate = today + '_cleanup';
       await cleanupConvertedDripLogs();
