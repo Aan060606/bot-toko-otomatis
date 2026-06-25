@@ -727,7 +727,25 @@ bot.command("debug_users", async (ctx) => {
 async function handleFixDb(ctx) {
   if (!admin.isAdmin(ctx)) return;
   
-  // Perbaiki semua user lama yang is_blocked atau purchase_count nya undefined
+  const args = ctx.message.text.split(' ');
+  const isApply = args.length >= 3 && args[1] === 'APPLY' && args[2] === 'CONFIRM';
+
+  const count1 = await User.countDocuments({ purchase_count: { $exists: false } });
+  const count2 = await User.countDocuments({ is_blocked: { $exists: false } });
+
+  if (!isApply) {
+    return ctx.reply(`🔍 *[DRY-RUN] /fix_db*\n\nDokumen yang AKAN diperbaiki:\n- Kolom belanja kosong: ${count1} user\n- Kolom blokir kosong: ${count2} user\n\nUntuk mengeksekusi secara permanen, ketik:\n\`/fix_db APPLY CONFIRM\``, { parse_mode: 'Markdown' });
+  }
+
+  // Lakukan audit logging
+  const fs = require('fs');
+  const path = require('path');
+  const logDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+  const logStr = `[${new Date().toISOString()}] Admin ID: ${ctx.from.id} executed /fix_db APPLY CONFIRM. Affected: purchase_count=${count1}, is_blocked=${count2}\n`;
+  fs.appendFileSync(path.join(logDir, 'fix_db.log'), logStr);
+  
+  // Perbaiki semua user lama
   const res1 = await User.updateMany(
     { purchase_count: { $exists: false } },
     { $set: { purchase_count: 0, total_spent: 0 } }
@@ -737,7 +755,7 @@ async function handleFixDb(ctx) {
     { $set: { is_blocked: false } }
   );
   
-  ctx.reply(`✅ *Database berhasil dibersihkan!*\n\nData lama yang nyangkut:\n- Diperbaiki kolom belanja: ${res1.modifiedCount} user\n- Diperbaiki kolom blokir: ${res2.modifiedCount} user\n\nSilakan cek /debug_users lagi!`, { parse_mode: 'Markdown' });
+  ctx.reply(`✅ *Database berhasil dibersihkan!*\n\nData yang diperbaiki:\n- Kolom belanja: ${res1.modifiedCount} user\n- Kolom blokir: ${res2.modifiedCount} user\n\nAudit log telah disimpan.`, { parse_mode: 'Markdown' });
 }
 
 bot.command("fix_db", async (ctx) => {
