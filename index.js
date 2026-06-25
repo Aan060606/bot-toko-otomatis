@@ -377,7 +377,7 @@ bot.use(async (ctx, next) => {
         userId,
         updateOp,
         { upsert: true, new: true, setDefaultsOnInsert: true }
-      ).catch(err => logger.error("Gagal update user tracking:", err.message));
+      ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
     }
   }
   return next();
