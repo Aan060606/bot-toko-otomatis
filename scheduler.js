@@ -115,20 +115,20 @@ async function runNonBuyerCampaign(bot) {
     '\u{1F6D2} *Tinggal 1 Langkah Lagi!*\n\n' +
     'Hai, sepertinya transaksi VIP-mu belum selesai.\n' +
     'Akses ratusan film/scene siap menantimu. Jangan ragu, koleksi akan terus diupdate secara otomatis!\n\n' +
-    'Klik /start lalu selesaikan pembayaranmu sekarang ya. \u{1F525}'
+    'Klik tombol **Beli** di bawah lalu selesaikan pembayaranmu sekarang ya. \u{1F525}'
   );
 
   const msgInactive = await getMsg('inactive',
     '\u{1F440} *Udah lama nih gak kelihatan!*\n\n' +
     'Kami punya banyak koleksi J-SUB terbaru lho. Sayang banget kalau kamu kelewatan.\n\n' +
-    'Klik /start sekarang dan cek katalog terbaru kami! \u2728'
+    'Klik tombol **Beli** di bawah sekarang dan cek penawaran kami! \u2728'
   );
 
   const msgColdLead = await getMsg('cold_lead',
     '\u{1F44B} *Hei! Belum nyobain Akses VIP kami?*\n\n' +
     'Ribuan orang sudah bergabung dan menikmati konten J-SUB premium setiap hari.\n' +
     'Sekali beli \u2014 nikmati selamanya. Tanpa biaya langganan! \u{1F389}\n\n' +
-    'Klik /start sekarang! \u{1F680}'
+    'Klik tombol **Beli** di bawah sekarang! \u{1F680}'
   );
 
   const nonBuyers = await User.find({ 
@@ -273,7 +273,7 @@ async function runCrossSellCampaign(bot, allProducts) {
     'Kamu sudah punya akses *{produk_lama}* \u2014 pilihan yang tepat! \u{1F44D}\n\n' +
     'Tapi tahukah kamu kami juga punya *{produk_baru}*?\n\n' +
     'Sama-sama *VIP Permanen* \u2014 sekali beli, nikmati selamanya!\n\n' +
-    'Klik /start untuk lihat dan langsung order! \u{1F525}'
+    'Klik tombol **Beli** di bawah untuk langsung order! \u{1F525}'
   );
 
   const partialBuyers = await User.find({ purchase_count: { $gt: 0 }, is_blocked: { $ne: true } }).lean();
@@ -369,7 +369,7 @@ async function runDripFollowUp(bot) {
       `\u23F0 *Hei ${user.first_name || 'Kamu'}!*\n\n` +
       `Masih ingat *${productName}* yang kami tawarkan beberapa hari lalu?\n\n` +
       `Penawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\n` +
-      `Klik /start sekarang sebelum terlambat! \u{1F525}`;
+      `Klik tombol **Beli** di bawah sekarang sebelum terlambat! \u{1F525}`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
@@ -430,7 +430,7 @@ async function runDripFollowUp(bot) {
       `\u{1F514} *${user.first_name || 'Hei'}! Ini reminder terakhir dari kami.*\n\n` +
       `Kami tahu kamu tertarik dengan *${productName}*.\n\n` +
       `Sebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\n` +
-      `Klik /start sekarang untuk klaim diskon otomatismu! \u{1F381}`;
+      `Klik tombol **Beli** di bawah sekarang untuk klaim diskon otomatismu! \u{1F381}`;
 
     let keyboard = null;
     if (product) keyboard = buildProductMarkup(product);
@@ -507,18 +507,18 @@ async function sendTestMarketing(bot, userId, type) {
   let msg = '';
 
   if (type === 'cold_lead') {
-    msg = await getMsg('cold_lead', '\u{1F44B} *Hei! Belum nyobain Akses VIP kami?*\n\nRibuan orang sudah bergabung dan menikmati konten J-SUB premium setiap hari.\nSekali beli \u2014 nikmati selamanya. Tanpa biaya langganan! \u{1F389}\n\nKlik /start sekarang! \u{1F680}');
+    msg = await getMsg('cold_lead', '\u{1F44B} *Hei! Belum nyobain Akses VIP kami?*\n\nRibuan orang sudah bergabung dan menikmati konten J-SUB premium setiap hari.\nSekali beli \u2014 nikmati selamanya. Tanpa biaya langganan! \u{1F389}\n\nKlik tombol **Beli** di bawah sekarang! \u{1F680}');
   } else if (type === 'cart_abandon') {
-    msg = await getMsg('cart_abandon', '\u{1F6D2} *Tinggal 1 Langkah Lagi!*\n\nHai, sepertinya transaksi VIP-mu belum selesai.\nAkses ratusan film/scene siap menantimu. Jangan ragu, koleksi akan terus diupdate secara otomatis!\n\nKlik /start lalu selesaikan pembayaranmu sekarang ya. \u{1F525}');
+    msg = await getMsg('cart_abandon', '\u{1F6D2} *Tinggal 1 Langkah Lagi!*\n\nHai, sepertinya transaksi VIP-mu belum selesai.\nAkses ratusan film/scene siap menantimu. Jangan ragu, koleksi akan terus diupdate secara otomatis!\n\nKlik tombol **Beli** di bawah lalu selesaikan pembayaranmu sekarang ya. \u{1F525}');
   } else if (type === 'inactive') {
-    msg = await getMsg('inactive', '\u{1F440} *Udah lama nih gak kelihatan!*\n\nKami punya banyak koleksi J-SUB terbaru lho. Sayang banget kalau kamu kelewatan.\n\nKlik /start sekarang dan cek katalog terbaru kami! \u2728');
+    msg = await getMsg('inactive', '\u{1F440} *Udah lama nih gak kelihatan!*\n\nKami punya banyak koleksi J-SUB terbaru lho. Sayang banget kalau kamu kelewatan.\n\nKlik tombol **Beli** di bawah sekarang dan cek penawaran kami! \u2728');
   } else if (type === 'cross_sell') {
-    const msgTemplate = await getMsg('cross_sell', '\u{1F389} *Hei {nama}!*\n\nKamu sudah punya akses *{produk_lama}* \u2014 pilihan yang tepat! \u{1F44D}\n\nTapi tahukah kamu kami juga punya *{produk_baru}*?\n\nSama-sama *VIP Permanen* \u2014 sekali beli, nikmati selamanya!\n\nKlik /start untuk lihat dan langsung order! \u{1F525}');
+    const msgTemplate = await getMsg('cross_sell', '\u{1F389} *Hei {nama}!*\n\nKamu sudah punya akses *{produk_lama}* \u2014 pilihan yang tepat! \u{1F44D}\n\nTapi tahukah kamu kami juga punya *{produk_baru}*?\n\nSama-sama *VIP Permanen* \u2014 sekali beli, nikmati selamanya!\n\nKlik tombol **Beli** di bawah untuk langsung order! \u{1F525}');
     msg = msgTemplate.replace('{nama}', 'Bos').replace('{produk_lama}', 'VIP Basic').replace('{produk_baru}', defaultProduct.name);
   } else if (type === 'stage2') {
-    msg = `\u23F0 *Hei Bos!*\n\nMasih ingat *${defaultProduct.name}* yang kami tawarkan beberapa hari lalu?\n\nPenawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\nKlik /start sekarang sebelum terlambat! \u{1F525}`;
+    msg = `\u23F0 *Hei Bos!*\n\nMasih ingat *${defaultProduct.name}* yang kami tawarkan beberapa hari lalu?\n\nPenawaran ini hampir selesai! Jangan sampai kamu menyesal karena kehabisan.\n\nKlik tombol **Beli** di bawah sekarang sebelum terlambat! \u{1F525}`;
   } else if (type === 'stage3') {
-    msg = `\u{1F514} *Bos! Ini reminder terakhir dari kami.*\n\nKami tahu kamu tertarik dengan *${defaultProduct.name}*.\n\nSebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\nKlik /start sekarang untuk klaim diskon otomatismu! \u{1F381}`;
+    msg = `\u{1F514} *Bos! Ini reminder terakhir dari kami.*\n\nKami tahu kamu tertarik dengan *${defaultProduct.name}*.\n\nSebagai apresiasi, kami kasih *diskon spesial Rp5.000* khusus untukmu, berlaku 24 jam!\n\nKlik tombol **Beli** di bawah sekarang untuk klaim diskon otomatismu! \u{1F381}`;
   } else {
     return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
   }
