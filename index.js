@@ -712,6 +712,20 @@ bot.command("admin", async (ctx) => {
   return admin.showAdminMenu(ctx);
 });
 
+bot.command("health", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const mongoose = require('mongoose');
+  const memUsage = process.memoryUsage();
+  
+  let text = `🏥 *System Health Check*\n\n`;
+  text += `• MongoDB State: \`${mongoose.connection.readyState}\` (1=Connected)\n`;
+  text += `• Cron Scheduler: \`${scheduler.isMarketingEnabled() ? 'ACTIVE' : 'INACTIVE'}\`\n`;
+  text += `• Uptime: \`${Math.floor(process.uptime())}s\`\n`;
+  text += `• Memory (RSS): \`${Math.round(memUsage.rss / 1024 / 1024)} MB\`\n`;
+  text += `• Memory (Heap): \`${Math.round(memUsage.heapUsed / 1024 / 1024)} MB\`\n`;
+  
+  ctx.reply(text, { parse_mode: 'Markdown' });
+});
 bot.command("debug_users", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   const users = await User.find({}).lean();
