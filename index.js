@@ -904,22 +904,34 @@ bot.action("admin_crm_stats", async (ctx) => {
   return admin.showAdminCrmStats(ctx);
 });
 
-// Handler tombol Broadcast CRM — tampilkan panduan command
+// Handler tombol Broadcast CRM — UI interaktif
 bot.action("admin_crm_menu", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
-  const text = `📢 *Panduan Broadcast CRM*\n\n` +
-    `Gunakan command berikut di chat ini:\n\n` +
-    `/broadcast\\_all <pesan>\n_Kirim ke semua user_\n\n` +
-    `/broadcast\\_buyer <pesan>\n_Kirim ke user yang sudah beli_\n\n` +
-    `/broadcast\\_nonbuyer <pesan>\n_Kirim ke user yang belum beli_\n\n` +
-    `/broadcast\\_product <product\\_id> <pesan>\n_Kirim ke pembeli produk tertentu_\n\n` +
-    `⏱ Delay: 1 detik per pesan (Anti-Spam)`;
-  const kb = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_main")]]);
+  const text = `📢 *Menu Broadcast CRM*\n\nPilih target broadcast Anda:`;
+  const kb = Markup.inlineKeyboard([
+    [Markup.button.callback("📢 Semua User", "broadcast_ui_all")],
+    [Markup.button.callback("🛍️ Sudah Beli", "broadcast_ui_buyer"), Markup.button.callback("👤 Belum Beli", "broadcast_ui_nonbuyer")],
+    [Markup.button.callback("🔙 Kembali", "admin_main")]
+  ]);
   return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
 });
 
-// Handler tombol Diskon Otomatis — tampilkan panduan command
+bot.action(/broadcast_ui_(all|buyer|nonbuyer)/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const type = ctx.match[1];
+  ctx.session = ctx.session || {};
+  ctx.session.step = 'admin_broadcast_' + type;
+  await ctx.answerCbQuery();
+  
+  let target = "Semua User";
+  if (type === 'buyer') target = "User yang Sudah Membeli";
+  if (type === 'nonbuyer') target = "User yang Belum Beli";
+  
+  return ctx.reply(`📝 *Broadcast ke ${target}*\n\nKetik pesan yang ingin Anda kirimkan sekarang.\n_(Atau ketik BATAL untuk membatalkan)_`, { parse_mode: "Markdown" });
+});
+
+// Handler tombol Diskon Otomatis — UI interaktif
 bot.action("admin_discount", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
@@ -985,6 +997,44 @@ bot.on('message', async (ctx, next) => {
     }
     ctx.session = {};
     return ctx.reply("✅ Header menu berhasil diperbarui! Cek dengan mengetik /start");
+  }
+
+  if (session.step && session.step.startsWith('admin_broadcast_')) {
+    const type = session.step.replace('admin_broadcast_', '');
+    const msg = ctx.message.text.trim();
+    ctx.session = {}; // reset
+    if (msg.toUpperCase() === 'BATAL') return ctx.reply("❌ Aksi dibatalkan.");
+    
+    if (type === 'all') await runBroadcast(ctx, {}, 'ALL', msg);
+    else if (type === 'buyer') await runBroadcast(ctx, { purchase_count: { $gt: 0 } }, 'BUYERS', msg);
+    else if (type === 'nonbuyer') await runBroadcast(ctx, { purchase_count: 0 }, 'NON_BUYERS', msg);
+    return;
+  }
+
+  if (session.step === 'admin_discount_create') {
+    const msg = ctx.message.text.trim();
+    ctx.session = {}; // reset
+    if (msg.toUpperCase() === 'BATAL') return ctx.reply("❌ Aksi dibatalkan.");
+    
+    const args = msg.split(' ');
+    if (args.length < 4) {
+      return ctx.reply("❌ Format salah. Aksi dibatalkan. Silakan mulai ulang dari menu.");
+    }
+    const [code, type, valueStr, trigger_event] = args;
+    const value = parseInt(valueStr);
+    if (isNaN(value)) return ctx.reply("❌ Nilai diskon harus berupa angka. Aksi dibatalkan.");
+
+    try {
+      await Discount.create({
+        code,
+        type: type.toUpperCase(),
+        value,
+        trigger_event: trigger_event.toUpperCase()
+      });
+      return ctx.reply(`✅ Diskon otomatis *${code}* berhasil dibuat!`, { parse_mode: 'Markdown' });
+    } catch (err) {
+      return ctx.reply(`❌ Gagal membuat diskon: ${err.message}`);
+    }
   }
 
   if (!ctx.message.text) return ctx.reply("❌ Harap kirimkan teks yang sesuai.");
