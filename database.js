@@ -53,6 +53,7 @@ const OrderSchema = new mongoose.Schema({
   success_processed_at: Date,
   created_at: { type: Date, default: Date.now }
 });
+OrderSchema.index({ user_id: 1, status: 1 });
 
 const OrderItemSchema = new mongoose.Schema({
   order_id: { type: String, ref: 'Order' },
@@ -100,17 +101,25 @@ const DripLogSchema = new mongoose.Schema({
   stage: { type: Number, default: 1 },           // Tahap saat ini: 1 (awal), 2 (urgensi), 3 (final)
   sent_at: { type: Date, default: Date.now },    // Kapan pesan tahap ini dikirim
   converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
+  exited_reason: { type: String, enum: ['TIMEOUT', 'PURCHASE', 'BLOCKED'] },
   variant: { type: String, enum: ['A', 'B'] },   // Untuk A/B Testing
   created_at: { type: Date, default: Date.now }
 });
-// TTL 90 hari khusus untuk log yang sudah converted
-DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60, partialFilterExpression: { converted: true } });
+// TTL 180 hari absolut untuk menghapus data usang yang macet atau sudah converted
+DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
 
 const ABTestResultSchema = new mongoose.Schema({
   variant: { type: String, enum: ['A', 'B'] },
   stage: Number,
   converted: { type: Boolean, default: false },
   created_at: { type: Date, default: Date.now }
+});
+
+const CronProgressSchema = new mongoose.Schema({
+  date: { type: String, unique: true }, // Format YYYY-MM-DD
+  campaign: String, // 'DRIP', 'NON_BUYER', 'VIP', 'CROSS_SELL'
+  last_processed_id: mongoose.Schema.Types.ObjectId,
+  completed: { type: Boolean, default: false }
 });
 
 const BroadcastLogSchema = new mongoose.Schema({
@@ -135,5 +144,6 @@ module.exports = {
   Discount: mongoose.model('Discount', DiscountSchema),
   DripLog: mongoose.model('DripLog', DripLogSchema),
   BroadcastLog: mongoose.model('BroadcastLog', BroadcastLogSchema),
-  ABTestResult: mongoose.model('ABTestResult', ABTestResultSchema)
+  ABTestResult: mongoose.model('ABTestResult', ABTestResultSchema),
+  CronProgress: mongoose.model('CronProgress', CronProgressSchema)
 };

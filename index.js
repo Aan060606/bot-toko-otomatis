@@ -314,9 +314,11 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId) {
         await onPaymentSuccess(ctx, chatId, msgId, donationId, orderId);
       } else if (["FAILED", "EXPIRED", "CANCEL", "FAILURE", "DENY"].includes(rawStatus)) {
         stopPolling(donationId);
-        try { await ctx.telegram.editMessageText(chatId, msgId, null, `❌ Pembayaran Gagal/Kedaluwarsa.`, { parse_mode: "Markdown" }); } catch (_) {}
+        try { await Order.findByIdAndUpdate(orderId, { status: 'FAILED' }); } catch (e) {}
+        try { await ctx.telegram.editMessageText(chatId, msgId, null, `❌ Pembayaran Gagal/Dibatalkan.`, { parse_mode: "Markdown" }); } catch (_) {}
       } else if (secondsLeft <= 0) {
         stopPolling(donationId);
+        try { await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED' }); } catch (e) {}
         try { await ctx.telegram.editMessageText(chatId, msgId, null, `⏰ Waktu bayar habis.`, { parse_mode: "Markdown" }); } catch (_) {}
       }
     } catch (err) {}
@@ -379,6 +381,23 @@ bot.use(async (ctx, next) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
     }
+  }
+  return next();
+});
+
+// Cooldown / Anti-Spam Middleware khusus untuk aksi tombol (Callback Query)
+const clickCooldowns = new Map();
+bot.on('callback_query', async (ctx, next) => {
+  if (ctx.from) {
+    const userId = ctx.from.id;
+    const now = Date.now();
+    const lastClick = clickCooldowns.get(userId) || 0;
+    
+    // Cooldown 3 detik
+    if (now - lastClick < 3000) {
+      return ctx.answerCbQuery("⏳ Mohon tunggu 3 detik sebelum memencet tombol lagi.", { show_alert: true });
+    }
+    clickCooldowns.set(userId, now);
   }
   return next();
 });
@@ -505,21 +524,25 @@ bot.command("user", async (ctx) => {
   const targetId = ctx.message.text.replace('/user', '').trim();
   if (!targetId) return ctx.reply("Format salah. Gunakan: /user <user_id>");
   
-  const targetUser = await User.findById(targetId).lean();
-  if (!targetUser) return ctx.reply("❌ User tidak ditemukan di database.");
-  
-  const text = `👤 *Data Pelanggan*\n\n` +
-               `ID: \`${targetUser._id}\`\n` +
-               `Nama: ${targetUser.first_name}\n` +
-               `Username: ${targetUser.username}\n` +
-               `Status: ${targetUser.purchase_count > 0 ? '✅ Sudah Beli' : '❌ Belum Beli'}\n` +
-               `Total Belanja: Rp ${targetUser.total_spent.toLocaleString('id-ID')}\n` +
-               `Jml Transaksi: ${targetUser.purchase_count}\n` +
-               `Tgl Join: ${targetUser.joined_at ? new Date(targetUser.joined_at).toLocaleString() : '-'}\n` +
-               `Tgl Aktif: ${targetUser.last_active_at ? new Date(targetUser.last_active_at).toLocaleString() : '-'}\n` +
-               `Diblokir: ${targetUser.is_blocked ? 'Ya' : 'Tidak'}`;
-               
-  ctx.reply(text, { parse_mode: 'Markdown' });
+  try {
+    const targetUser = await User.findById(targetId).lean();
+    if (!targetUser) return ctx.reply("❌ User tidak ditemukan di database.");
+    
+    const text = `👤 *Data Pelanggan*\n\n` +
+                 `ID: \`${targetUser._id}\`\n` +
+                 `Nama: ${targetUser.first_name}\n` +
+                 `Username: ${targetUser.username}\n` +
+                 `Status: ${targetUser.purchase_count > 0 ? '✅ Sudah Beli' : '❌ Belum Beli'}\n` +
+                 `Total Belanja: Rp ${targetUser.total_spent.toLocaleString('id-ID')}\n` +
+                 `Jml Transaksi: ${targetUser.purchase_count}\n` +
+                 `Tgl Join: ${targetUser.joined_at ? new Date(targetUser.joined_at).toLocaleString() : '-'}\n` +
+                 `Tgl Aktif: ${targetUser.last_active_at ? new Date(targetUser.last_active_at).toLocaleString() : '-'}\n` +
+                 `Diblokir: ${targetUser.is_blocked ? 'Ya' : 'Tidak'}`;
+                 
+    ctx.reply(text, { parse_mode: 'Markdown' });
+  } catch (err) {
+    ctx.reply("❌ ID tidak valid, harus berupa angka.");
+  }
 });
 
 bot.command("discount_list", async (ctx) => {
@@ -548,14 +571,19 @@ bot.command("creatediscount", async (ctx) => {
   const [code, type, valueStr, trigger_event] = args;
   const value = parseInt(valueStr);
   
-  await Discount.create({
-    code,
-    type: type.toUpperCase(),
-    value,
-    trigger_event: trigger_event.toUpperCase()
-  });
-  
-  ctx.reply(`✅ Diskon otomatis *${code}* berhasil dibuat!`, { parse_mode: 'Markdown' });
+  if (isNaN(value)) return ctx.reply("❌ Nilai diskon harus berupa angka.");
+
+  try {
+    await Discount.create({
+      code,
+      type: type.toUpperCase(),
+      value,
+      trigger_event: trigger_event.toUpperCase()
+    });
+    ctx.reply(`✅ Diskon otomatis *${code}* berhasil dibuat!`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    ctx.reply(`❌ Gagal membuat diskon: ${err.message}`);
+  }
 });
 
 bot.command("deletediscount", async (ctx) => {
