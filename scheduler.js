@@ -59,6 +59,23 @@ function buildProductMarkup(product, discountAmount = 0) {
   return Markup.inlineKeyboard(buttons);
 }
 
+function calculateDynamicDiscount(user) {
+  const daysSinceJoin = (Date.now() - new Date(user.joined_at)) / (1000 * 60 * 60 * 24);
+  const purchaseCount = user.purchase_count || 0;
+  const totalSpent = user.total_spent || 0;
+
+  if (totalSpent > 100000 || purchaseCount >= 5) {
+    return { percentage: 10, title: 'Khusus Member VIP' };
+  }
+  if (purchaseCount === 0 && daysSinceJoin > 30) {
+    return { percentage: 50, title: 'Spesial Comeback 50%' };
+  }
+  if (purchaseCount === 0) {
+    return { percentage: 20, title: 'Diskon Khusus 20%' };
+  }
+  return { percentage: 15, title: 'Promo Pelanggan Setia' };
+}
+
 async function sendSafe(bot, userId, text, options = {}) {
   try {
     const extra = { parse_mode: 'Markdown' };
@@ -432,14 +449,15 @@ async function runDripFollowUp(bot) {
     const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
-    const discountAmount = product ? Math.floor(product.price * 0.15) : 5000;
+    const discountRule = calculateDynamicDiscount(user);
+    const discountAmount = product ? Math.floor(product.price * (discountRule.percentage / 100)) : 5000;
 
     // Buat diskon khusus untuk user ini saja, berlaku 24 jam
     const dripCode = 'DRIP_' + log.user_id + '_' + Date.now();
     await Discount.create({
       code: dripCode,
       type: 'PERCENTAGE',
-      value: 15,
+      value: discountRule.percentage,
       trigger_event: 'ALL',
       target_user_id: user._id,
       target_product_id: String(log.product_id),
@@ -449,7 +467,7 @@ async function runDripFollowUp(bot) {
     });
 
     const msg =
-      `\u{1F48E} *Diskon 15% Khusus ${productName}!*\n\n` +
+      `\u{1F48E} *${discountRule.title} ${productName}!*\n\n` +
       `\u27DF Potongan otomatis (24 Jam)\n\n` +
       `\u{1F447} Klaim diskon sekarang`;
 
@@ -588,8 +606,12 @@ async function sendTestMarketing(bot, userId, type) {
   } else if (type === 'stage2') {
     msg = `\u23F3 *Promo ${defaultProduct.name} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
   } else if (type === 'stage3') {
-    const discountAmount = Math.floor(defaultProduct.price * 0.15);
-    msg = `\u{1F48E} *Diskon 15% Khusus ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
+    // Simulasi untuk test marketing (misalnya profil Dead Lead)
+    const mockUser = { joined_at: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000), purchase_count: 0, total_spent: 0 };
+    const discountRule = calculateDynamicDiscount(mockUser);
+    const discountAmount = Math.floor(defaultProduct.price * (discountRule.percentage / 100));
+    
+    msg = `\u{1F48E} *${discountRule.title} ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
     keyboard = buildProductMarkup(defaultProduct, discountAmount);
   } else if (type === 'downsell') {
     msg = `\u{1F614} *Masih Ragu, Bos?*\n\nMungkin penawaran sebelumnya belum cocok untukmu saat ini.\n\nSebagai opsi paling hemat, cobalah *${defaultProduct.name}*!\n\n\u27DF Harga sangat terjangkau\n\u27DF Akses instan\n\n\u{1F447} Coba opsi hemat ini`;
