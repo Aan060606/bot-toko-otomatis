@@ -891,6 +891,12 @@ bot.action("admin_main", async (ctx) => {
   return admin.showAdminMenu(ctx);
 });
 
+bot.action("admin_guide", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  return admin.showGuide(ctx);
+});
+
 
 bot.action("admin_shop_menu", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;

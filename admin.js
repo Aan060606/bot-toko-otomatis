@@ -13,13 +13,38 @@ function showAdminMenu(ctx, edit = false) {
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback("📦 Kelola Toko & Pesanan", "admin_shop_menu")],
     [Markup.button.callback("📢 Marketing & CRM", "admin_marketing_menu")],
-    [Markup.button.callback("⚙️ Pengaturan Sistem", "admin_system_menu")]
+    [Markup.button.callback("⚙️ Pengaturan Sistem", "admin_system_menu")],
+    [Markup.button.callback("📖 Buku Panduan (FAQ)", "admin_guide")]
   ]);
   
   if (edit) {
     return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
   }
   return ctx.replyWithMarkdown(text, keyboard);
+}
+
+function showGuide(ctx) {
+  const text = `📖 *Buku Panduan Admin (FAQ)*
+
+*1. Cara Kerja Bot (Otomatis)*
+• *Follow-up Keranjang*: User yang klik "Beli" tapi belum bayar akan diingatkan setelah 1 Jam.
+• *Drip Funnel*: Edukasi ke user yang belum pernah beli dikirim di Hari 1, 3, dan 7 jam 10:00 pagi.
+• *Cross-sell*: Penawaran produk lain H+1 setelah user sukses membeli.
+• *Auto-Backup*: Semua data di-backup setiap jam 02:00 pagi ke chat Anda.
+
+*2. Cara Tambah Produk*
+Masuk ke \`Kelola Toko > Manajemen Produk > Tambah Produk\`. Ikuti instruksinya. Setelah selesai, *JANGAN LUPA TAMBAH STOK*. Stok adalah *Link VIP / File Teks* yang dikirimkan ke pembeli setelah mereka bayar.
+
+*3. Cara Broadcast*
+Masuk ke \`Marketing > Broadcast\`. Pilih targetnya, ketik pesannya, dan bot akan mengirimnya dengan delay 1 detik per user agar tidak kena limit Telegram.
+
+*4. Diskon Otomatis*
+Masuk ke \`Marketing > Diskon\`. Anda bisa buat kode promo yang akan *trigger* otomatis saat checkout, misalnya untuk \`FIRST_TIME\` (pembelian pertama) atau \`CART_ABANDON\` (keranjang tertinggal).
+
+_Kendalikan semua fitur hanya melalui menu tombol ini. Tidak perlu menghafal garis miring (/)!_`;
+
+  const keyboard = Markup.inlineKeyboard([[Markup.button.callback("🔙 Menu Utama", "admin_main")]]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
 }
 
 function showShopMenu(ctx) {
@@ -174,6 +199,7 @@ async function showAdminCrmStats(ctx) {
 module.exports = {
   isAdmin,
   showAdminMenu,
+  showGuide,
   showShopMenu,
   showMarketingMenu,
   showSystemMenu,
