@@ -54,7 +54,8 @@ async function createOrder(donationId, userId, totalAmount, cartItems, discountI
     { $set: { status: 'CANCELLED' } }
   );
 
-  const orderId = 'ORD-' + Date.now();
+  const crypto = require('crypto');
+  const orderId = 'ORD-' + Date.now() + '-' + crypto.randomUUID().slice(0, 8);
   
   await Order.create({
     _id: orderId,
