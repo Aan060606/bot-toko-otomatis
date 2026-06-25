@@ -41,6 +41,15 @@ function formatRupiah(amount) {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
 }
 
+async function replySafe(ctx, text, options) {
+  try {
+    return await ctx.reply(text, options);
+  } catch (err) {
+    logger.error("Telegram reply failed:", err.message);
+    return ctx.reply(text.replace(/[*_`]/g, ""));
+  }
+}
+
 let browserInstance = null;
 let bgPage = null;
 
@@ -599,7 +608,7 @@ bot.command("marketing_on", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(true);
   scheduler.startCron(bot);
-  ctx.reply("✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
+  replySafe(ctx, "✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
 });
 
 // Matikan marketing otomatis harian
@@ -607,7 +616,7 @@ bot.command("marketing_off", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(false);
   scheduler.stopDailyCron();
-  ctx.reply("🔴 *Marketing otomatis DIMATIKAN.*\n\nGunakan `/marketing_on` untuk mengaktifkan kembali.", { parse_mode: 'Markdown' });
+  replySafe(ctx, "🔴 *Marketing otomatis DIMATIKAN.*\n\nGunakan `/marketing_on` untuk mengaktifkan kembali.", { parse_mode: 'Markdown' });
 });
 
 // Ubah template pesan marketing dari Telegram (tanpa coding ulang)
@@ -621,11 +630,10 @@ bot.command("set_msg", async (ctx) => {
     return ctx.reply(
       "Format: /set_msg <segmen> <pesan>\n\n" +
       "Segmen tersedia:\n" +
-      "• `cold_lead` — User yang belum pernah klik beli\n" +
-      "• `cart_abandon` — User klik beli tapi tidak jadi bayar\n" +
-      "• `inactive` — User tidak aktif > 7 hari\n\n" +
-      "Contoh:\n`/set_msg cart_abandon Hei! Jangan sampai kehabisan slot VIP ya! Klik /start sekarang!`",
-      { parse_mode: 'Markdown' }
+      "- cold_lead — User yang belum pernah klik beli\n" +
+      "- cart_abandon — User klik beli tapi tidak jadi bayar\n" +
+      "- inactive — User tidak aktif > 7 hari\n\n" +
+      "Contoh:\n/set_msg cart_abandon Hei! Jangan sampai kehabisan slot VIP ya! Klik /start sekarang!"
     );
   }
 
@@ -1185,10 +1193,10 @@ bot.catch((err, ctx) => {
 
 async function handleTestPay(ctx) {
   if (!ADMIN_CHAT_ID || ctx.from.id.toString() !== ADMIN_CHAT_ID.toString()) {
-    return ctx.reply(`❌ Akses ditolak! Perintah ini hanya untuk Admin utama.\nID Anda saat ini: \`${ctx.from.id}\`\nSedangkan ID Admin di .env: \`${ADMIN_CHAT_ID}\``, { parse_mode: "Markdown" });
+    return replySafe(ctx, `❌ Akses ditolak! Perintah ini hanya untuk Admin utama.\nID Anda saat ini: \`${ctx.from.id}\`\nSedangkan ID Admin di .env: \`${ADMIN_CHAT_ID}\``, { parse_mode: "Markdown" });
   }
   const args = ctx.message.text.split(" ");
-  if (args.length < 2) return ctx.reply("Format: `/testpay <ORDER_ID>`\nContoh: `/testpay ORD-12345`", { parse_mode: "Markdown" });
+  if (args.length < 2) return replySafe(ctx, "Format: `/testpay <ORDER_ID>`\nContoh: `/testpay ORD-12345`", { parse_mode: "Markdown" });
   
   const orderId = args[1];
   const order = await store.getOrder(orderId);
