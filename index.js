@@ -381,12 +381,25 @@ async function runBroadcast(adminCtx, queryFilter, segmentName, messageText) {
     return adminCtx.reply(`❌ Tidak ada target user untuk segmen: ${segmentName}`);
   }
 
+  const isDryRun = messageText.includes('DRY_RUN');
+  const isConfirm = messageText.includes('CONFIRM');
+
+  if (!isConfirm && !isDryRun) {
+    return adminCtx.reply(`🔍 *[PREVIEW] Broadcast*\n\nTarget Segmen: ${segmentName}\nJumlah Target: ${users.length} user\n\nUntuk mengirim pesan ini secara riil, tambahkan kata \`CONFIRM\` di akhir pesan Anda.\nUntuk mencoba simulasi (tanpa kirim), tambahkan \`DRY_RUN\`.`, { parse_mode: 'Markdown' });
+  }
+
+  const finalMessage = messageText.replace(/CONFIRM|DRY_RUN/g, '').trim();
+
+  if (isDryRun) {
+    return adminCtx.reply(`✅ *[DRY-RUN] Selesai*\n\nPesan (simulasi) akan terkirim ke ${users.length} user (${segmentName}).\nPesan:\n${finalMessage}`, { parse_mode: 'Markdown' });
+  }
+
   const statusMsg = await adminCtx.reply(`⏳ Memulai broadcast ke ${users.length} user (${segmentName})...\n\nMohon tunggu, proses mengirim 1 pesan per detik...`);
   
   const log = await BroadcastLog.create({
     admin_id: adminCtx.from.id,
     target_segment: segmentName,
-    message_text: messageText,
+    message_text: finalMessage,
     status: 'SENDING'
   });
 
@@ -397,7 +410,7 @@ async function runBroadcast(adminCtx, queryFilter, segmentName, messageText) {
   (async () => {
     for (const u of users) {
       try {
-        await bot.telegram.sendMessage(u._id, messageText, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(u._id, finalMessage, { parse_mode: 'Markdown' });
         success++;
       } catch (err) {
         failed++;
