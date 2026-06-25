@@ -51,7 +51,11 @@ function buildProductMarkup(product) {
 async function sendSafe(bot, userId, text, options = {}) {
   try {
     const extra = { parse_mode: 'Markdown' };
-    if (options.keyboard) extra.reply_markup = options.keyboard;
+    if (options.keyboard && options.keyboard.reply_markup) {
+      extra.reply_markup = options.keyboard.reply_markup;
+    } else if (options.keyboard) {
+      extra.reply_markup = options.keyboard;
+    }
     
     if (options.media) {
       const hType = options.mediaType || "url";
