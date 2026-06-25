@@ -609,7 +609,7 @@ bot.command("test_marketing", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   const args = ctx.message.text.split(' ').slice(1);
   if (args.length === 0) {
-    return replySafe(ctx, "Gunakan format:\n`/test_marketing <tipe>`\n\nTipe tersedia:\n- `cold_lead`\n- `cart_abandon`\n- `inactive`\n- `cross_sell`\n- `stage2`\n- `stage3`\n\nContoh: `/test_marketing cart_abandon`", { parse_mode: 'Markdown' });
+    return replySafe(ctx, "Gunakan format:\n`/test_marketing <tipe>`\n\nTipe tersedia:\n- `cold_lead`\n- `cart_abandon`\n- `inactive`\n- `cross_sell`\n- `stage2`\n- `stage3`\n- `downsell`\n\nContoh: `/test_marketing cart_abandon`", { parse_mode: 'Markdown' });
   }
   
   const type = args[0].toLowerCase();

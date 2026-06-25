@@ -135,19 +135,21 @@ async function runNonBuyerCampaign(bot) {
   );
 
   const msgColdLead = await getMsg('cold_lead',
-    '\u269C\uFE0F *Akses {produk} Menantimu* \u269C\uFE0F\n\n' +
+    '\u23F3 *Promo Perdana {produk}! (24 Jam)*\n\n' +
     '\u27DF Ribuan konten update tiap hari\n' +
     '\u27DF Sekali bayar, aktif selamanya\n\n' +
     '\u{1F447} Amankan sekarang'
   );
 
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
   const nonBuyers = await User.find({ 
     $or: [
       { purchase_count: 0 },
       { purchase_count: null },
       { purchase_count: { $exists: false } }
     ],
-    is_blocked: { $ne: true }
+    is_blocked: { $ne: true },
+    last_active_at: { $gte: sixtyDaysAgo }
   }).lean();
   const stats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
 
@@ -290,7 +292,12 @@ async function runCrossSellCampaign(bot, allProducts) {
     '\u{1F447} Order sekarang'
   );
 
-  const partialBuyers = await User.find({ purchase_count: { $gt: 0 }, is_blocked: { $ne: true } }).lean();
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  const partialBuyers = await User.find({ 
+    purchase_count: { $gt: 0 }, 
+    is_blocked: { $ne: true },
+    last_active_at: { $gte: sixtyDaysAgo }
+  }).lean();
   const totalCount = allProducts.length;
   const stats = { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
@@ -425,12 +432,14 @@ async function runDripFollowUp(bot) {
     const product = await Product.findById(log.product_id).lean();
     const productName = product ? product.name : 'produk pilihan kami';
 
+    const discountAmount = product ? Math.floor(product.price * 0.15) : 5000;
+
     // Buat diskon khusus untuk user ini saja, berlaku 24 jam
     const dripCode = 'DRIP_' + log.user_id + '_' + Date.now();
     await Discount.create({
       code: dripCode,
-      type: 'FIXED',
-      value: 5000,
+      type: 'PERCENTAGE',
+      value: 15,
       trigger_event: 'ALL',
       target_user_id: user._id,
       target_product_id: String(log.product_id),
@@ -440,12 +449,12 @@ async function runDripFollowUp(bot) {
     });
 
     const msg =
-      `\u{1F48E} *Diskon Rp5.000 Khusus ${productName}!*\n\n` +
+      `\u{1F48E} *Diskon 15% Khusus ${productName}!*\n\n` +
       `\u27DF Potongan otomatis (24 Jam)\n\n` +
       `\u{1F447} Klaim diskon sekarang`;
 
     let keyboard = null;
-    if (product) keyboard = buildProductMarkup(product, 5000);
+    if (product) keyboard = buildProductMarkup(product, discountAmount);
 
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
@@ -455,6 +464,52 @@ async function runDripFollowUp(bot) {
       stats.failed++;
     }
     await delay(1500);
+  }
+
+  // === Stage 4: Down-sell (Produk Termurah) untuk user yang mengabaikan Stage 3 > 7 hari ===
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const stage3Logs = await DripLog.find({
+    stage: 3,
+    sent_at: { $lte: sevenDaysAgo },
+    converted: false
+  }).lean();
+
+  if (stage3Logs.length > 0) {
+    const allProducts = await Product.find({ active: 1 }).sort({ price: 1 }).lean();
+    if (allProducts.length > 0) {
+      const cheapestProduct = allProducts[0];
+      for (const log of stage3Logs) {
+        const user = await User.findById(log.user_id).lean();
+        if (!user || user.is_blocked) {
+          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+          continue;
+        }
+
+        // Kalau ternyata user udah punya produk termurah ini
+        const boughtIds = await getBoughtProductIds(user._id);
+        if (boughtIds.includes(String(cheapestProduct._id))) {
+          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+          continue;
+        }
+
+        const msg = `\u{1F614} *Masih Ragu, ${user.first_name || 'Bos'}?*\n\n` +
+                    `Mungkin penawaran sebelumnya belum cocok untukmu saat ini.\n\n` +
+                    `Sebagai opsi paling hemat, cobalah *${cheapestProduct.name}*!\n\n` +
+                    `\u27DF Harga sangat terjangkau\n` +
+                    `\u27DF Akses instan\n\n` +
+                    `\u{1F447} Coba opsi hemat ini`;
+
+        const keyboard = buildProductMarkup(cheapestProduct);
+        const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
+        if (result.ok) {
+          await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
+          stats.stage4 = (stats.stage4 || 0) + 1;
+        } else {
+          stats.failed++;
+        }
+        await delay(1500);
+      }
+    }
   }
 
   return stats;
@@ -519,7 +574,7 @@ async function sendTestMarketing(bot, userId, type) {
   let msg = '';
 
   if (type === 'cold_lead') {
-    msg = await getMsg('cold_lead', '\u269C\uFE0F *Akses {produk} Menantimu* \u269C\uFE0F\n\n\u27DF Ribuan konten update tiap hari\n\u27DF Sekali bayar, aktif selamanya\n\n\u{1F447} Amankan sekarang');
+    msg = await getMsg('cold_lead', '\u23F3 *Promo Perdana {produk}! (24 Jam)*\n\n\u27DF Ribuan konten update tiap hari\n\u27DF Sekali bayar, aktif selamanya\n\n\u{1F447} Amankan sekarang');
     msg = msg.replace(/\{produk\}/g, defaultProduct.name);
   } else if (type === 'cart_abandon') {
     msg = await getMsg('cart_abandon', '\u26A0\uFE0F *Selesaikan Transaksi {produk}*\n\n\u27DF Jangan lewatkan update terbaru\n\n\u{1F447} Lanjut di bawah');
@@ -533,8 +588,11 @@ async function sendTestMarketing(bot, userId, type) {
   } else if (type === 'stage2') {
     msg = `\u23F3 *Promo ${defaultProduct.name} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
   } else if (type === 'stage3') {
-    msg = `\u{1F48E} *Diskon Rp5.000 Khusus ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
-    keyboard = buildProductMarkup(defaultProduct, 5000);
+    const discountAmount = Math.floor(defaultProduct.price * 0.15);
+    msg = `\u{1F48E} *Diskon 15% Khusus ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
+    keyboard = buildProductMarkup(defaultProduct, discountAmount);
+  } else if (type === 'downsell') {
+    msg = `\u{1F614} *Masih Ragu, Bos?*\n\nMungkin penawaran sebelumnya belum cocok untukmu saat ini.\n\nSebagai opsi paling hemat, cobalah *${defaultProduct.name}*!\n\n\u27DF Harga sangat terjangkau\n\u27DF Akses instan\n\n\u{1F447} Coba opsi hemat ini`;
   } else {
     return { ok: false, error: 'Tipe tidak valid. Gunakan: cold_lead, cart_abandon, inactive, cross_sell, stage2, stage3' };
   }
