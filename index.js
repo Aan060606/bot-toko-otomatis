@@ -1445,6 +1445,7 @@ async function showStoreMenu(ctx) {
   const text = `⛩️ 𝐉-𝐒𝐔𝐁 𝐂𝐎𝐋𝐋𝐄𝐂𝐓𝐈𝐎𝐍 𝐎𝐟𝐟𝐢𝐜𝐢𝐚𝐥 𝐇𝐮𝐛 ⛩️\n「 プレミアムアクセス • 𝑷𝒓𝒆𝒎𝒊𝒖𝒎 𝑨𝒄𝒄𝒆𝒔𝒔 」\n\nSilakan pilih lisensi VIP Anda di bawah ini ⚜️:\n\n_24/7 ON SIAP MELAYANI_${discountText}`;
   const buttons = [];
   
+  const formatK = (num) => num >= 1000 ? (num/1000) + 'k' : num.toString();
   const strikethrough = (str) => str.split('').join('\u0336') + '\u0336';
 
   for (const p of products) {
@@ -1453,11 +1454,11 @@ async function showStoreMenu(ctx) {
     }
     
     const discount = await store.applyAutomaticDiscount(userId, p._id, p.price);
-    let btnText = `🛒 Beli ${p.name} - ${formatRupiah(p.price)}`;
+    let btnText = `🛒 Beli ${p.name} • Rp${formatK(p.price)}`;
     
     if (discount) {
       const finalPrice = Math.max(0, p.price - discount.deduction);
-      btnText = `🛒 Beli ${p.name} - ${strikethrough(formatRupiah(p.price))} ➡️ ${formatRupiah(finalPrice)}`;
+      btnText = `🛒 Beli ${p.name} • ${strikethrough(formatK(p.price))} ➡️ Rp${formatK(finalPrice)}`;
     }
     
     buttons.push([Markup.button.callback(btnText, `buy_now_${p._id}`)]);
