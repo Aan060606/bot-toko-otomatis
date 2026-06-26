@@ -1568,7 +1568,7 @@ async function handleTestPay(ctx) {
   if (order.status === "SUCCESS") return ctx.reply("⚠️ Order ini sudah berstatus SUCCESS.");
 
   await ctx.reply(`🔄 [QA TEST: PAY-03]\nMemalsukan status pembayaran gateway...\n✅ Mocking API Status: SETTLEMENT / PAID / CAPTURE\n✅ Mengeksekusi callback success untuk ${orderId}...`);
-  await onPaymentSuccess(ctx, ctx.chat.id, ctx.message.message_id, order.donation_id, orderId);
+  await onPaymentSuccess(ctx, ctx.chat.id, order.status_msg_id, order.donation_id, orderId, order.qr_msg_id);
 }
 
 bot.command("testpay", async (ctx) => {
