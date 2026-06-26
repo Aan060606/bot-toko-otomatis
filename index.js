@@ -1575,11 +1575,65 @@ if (process.env.NODE_ENV !== "test") {
 
   const http = require("http");
   const PORT = process.env.PORT || 3000;
-  http.createServer((req, res) => {
+  http.createServer(async (req, res) => {
+    // === ENDPOINT WEBHOOK SAWERIA ===
+    if (req.method === "POST" && req.url === "/webhook") {
+      let body = "";
+      req.on("data", chunk => { body += chunk; });
+      req.on("end", async () => {
+        try {
+          const payload = JSON.parse(body);
+          if (payload.type === "donation" && payload.data) {
+            // Saweria webhook data bisa berupa array atau object tunggal
+            const items = Array.isArray(payload.data) ? payload.data : [payload.data];
+            
+            for (const item of items) {
+              const amount = parseInt(item.amount);
+              const donator = item.donator_name || item.donator || "Seseorang";
+              const msg = item.message || "";
+              
+              console.log(`[WEBHOOK] Menerima donasi dari ${donator}: Rp${amount}`);
+              
+              const match = msg.match(/\[UID:(\d+)\]/);
+              if (match && match[1]) {
+                const userId = parseInt(match[1]);
+                console.log(`[WEBHOOK] UID Terdeteksi: ${userId}`);
+                
+                const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+                if (order) {
+                  if (amount < order.total_amount) {
+                    const textKurang = `⚠️ *PEMBAYARAN TIDAK SESUAI*\n\nSistem mendeteksi dana masuk sebesar *Rp${amount}*, namun total tagihan pesanan Anda adalah *Rp${order.total_amount}*.\n\nPesanan DIBATALKAN. Silakan hubungi admin.`;
+                    bot.telegram.sendMessage(userId, textKurang, { parse_mode: "Markdown" }).catch(() => {});
+                    await Order.findByIdAndUpdate(order._id, { status: 'FAILED' });
+                  } else {
+                    console.log(`[WEBHOOK] Memproses order ${order._id}`);
+                    const mockCtx = { telegram: bot.telegram };
+                    await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
+                  }
+                }
+              } else {
+                if (process.env.ADMIN_CHAT_ID) {
+                  const text = `🔔 *WEBHOOK SAWERIA AMAN!*\nBot menerima sinyal (Test/Manual):\nDari: ${donator}\nJumlah: Rp${amount}\nPesan: ${msg}\n\n_Sistem Webhook berjalan sempurna!_`;
+                  bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }).catch(() => {});
+                }
+              }
+            }
+          }
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ status: "success" }));
+        } catch (e) {
+          console.error("[WEBHOOK] Error:", e.message);
+          res.writeHead(500);
+          res.end("Internal Server Error");
+        }
+      });
+      return;
+    }
+
     res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("Bot is alive!");
+    res.end("Bot is alive! Webhook is ready at /webhook");
   }).listen(PORT, () => {
-    logger.info(`🌐 HTTP Server berjalan di port ${PORT} (untuk Ping Bot 24/7)`);
+    logger.info(`🌐 HTTP Server & Webhook berjalan di port ${PORT}`);
   });
 }
 
