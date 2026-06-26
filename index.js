@@ -1577,7 +1577,7 @@ if (process.env.NODE_ENV !== "test") {
   const PORT = process.env.PORT || 3000;
   http.createServer(async (req, res) => {
     // === ENDPOINT WEBHOOK SAWERIA ===
-    if (req.method === "POST" && req.url === "/webhook") {
+    if (req.method === "POST" && req.url.startsWith("/webhook")) {
       let body = "";
       req.on("data", chunk => { body += chunk; });
       req.on("end", async () => {
