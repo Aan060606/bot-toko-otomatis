@@ -26,38 +26,40 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
       try {
         const payload = JSON.parse(data.toString());
         // event donation structure from Saweria WS
-        if (payload && payload.type === 'donations' || payload.donator) {
-          console.log("[WS] Notifikasi pembayaran instan diterima:", payload.donator, "Rp" + payload.amount);
-          
-          const msg = payload.message || "";
-          // Cari format [UID:12345] di pesan
-          const match = msg.match(/\[UID:(\d+)\]/);
-          
-          if (match && match[1]) {
-            const userId = parseInt(match[1]);
-            console.log(`[WS] Mendeteksi pembayaran untuk UID Telegram: ${userId}`);
+        if (payload && payload.type === 'donation' && Array.isArray(payload.data)) {
+          for (const item of payload.data) {
+            console.log("[WS] Notifikasi pembayaran instan diterima:", item.donator, "Rp" + item.amount);
             
-            // Cari order yang masih PENDING untuk user ini
-            const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+            const msg = item.message || "";
+            // Cari format [UID:12345] di pesan
+            const match = msg.match(/\[UID:(\d+)\]/);
             
-            if (order) {
-              console.log(`[WS] Ditemukan Order PENDING: ${order._id}. Memproses pesanan secara kilat!`);
+            if (match && match[1]) {
+              const userId = parseInt(match[1]);
+              console.log(`[WS] Mendeteksi pembayaran untuk UID Telegram: ${userId}`);
               
-              // Buat mock ctx karena onPaymentSuccess butuh ctx.telegram
-              const mockCtx = { telegram: bot.telegram };
+              // Cari order yang masih PENDING untuk user ini
+              const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
               
-              // Memanggil fungsi sukses yang ada di index.js
-              await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
-              console.log(`[WS] Order ${order._id} berhasil diproses via WebSockets!`);
+              if (order) {
+                console.log(`[WS] Ditemukan Order PENDING: ${order._id}. Memproses pesanan secara kilat!`);
+                
+                // Buat mock ctx karena onPaymentSuccess butuh ctx.telegram
+                const mockCtx = { telegram: bot.telegram };
+                
+                // Memanggil fungsi sukses yang ada di index.js
+                await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
+                console.log(`[WS] Order ${order._id} berhasil diproses via WebSockets!`);
+              } else {
+                console.log(`[WS] Pesanan PENDING tidak ditemukan untuk UID ${userId}. Mungkin sudah sukses via polling.`);
+              }
             } else {
-              console.log(`[WS] Pesanan PENDING tidak ditemukan untuk UID ${userId}. Mungkin sudah sukses via polling.`);
-            }
-          } else {
-            // Jika tidak ada [UID:xxx], kemungkinan ini adalah "Test Notifikasi" dari dashboard Saweria
-            console.log(`[WS] Menerima donasi/test tanpa UID dari ${payload.donator}.`);
-            if (process.env.ADMIN_CHAT_ID) {
-              const text = `🔔 *KONEKSI SSE/WS AMAN!*\nBot berhasil menangkap sinyal (Test/Manual) dari Saweria Overlay:\n\nDari: ${payload.donator}\nJumlah: Rp${payload.amount}\nPesan: ${msg}\n\n_Ini membuktikan sistem "Respon Kilat" sudah terhubung sempurna!_`;
-              bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }).catch(() => {});
+              // Jika tidak ada [UID:xxx], kemungkinan ini adalah "Test Notifikasi" dari dashboard Saweria
+              console.log(`[WS] Menerima donasi/test tanpa UID dari ${item.donator}.`);
+              if (process.env.ADMIN_CHAT_ID) {
+                const text = `🔔 *KONEKSI SSE/WS AMAN!*\nBot berhasil menangkap sinyal (Test/Manual) dari Saweria Overlay:\n\nDari: ${item.donator}\nJumlah: Rp${item.amount}\nPesan: ${msg}\n\n_Ini membuktikan sistem "Respon Kilat" sudah terhubung sempurna!_`;
+                bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }).catch(() => {});
+              }
             }
           }
         }
