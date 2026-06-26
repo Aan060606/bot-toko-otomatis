@@ -400,7 +400,7 @@ bot.use(async (ctx, next) => {
       User.findByIdAndUpdate(
         userId,
         updateOp,
-        { upsert: true, new: true, setDefaultsOnInsert: true }
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
       ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
     }
   }
