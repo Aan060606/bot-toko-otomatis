@@ -17,7 +17,7 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
     console.log("[SSE] Berhasil terhubung ke WebSocket Overlay Saweria. Menunggu pembayaran...");
   };
 
-  es.addEventListener('donations', async (event) => {
+  const handleDonationEvent = async (event) => {
     try {
       const data = JSON.parse(event.data);
       console.log("[SSE] Notifikasi pembayaran instan diterima:", data.donator, "Rp" + data.amount);
@@ -58,7 +58,11 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
     } catch (e) {
       console.error("[SSE] Error saat memproses event donations:", e.message);
     }
-  });
+  };
+
+  es.addEventListener('donations', handleDonationEvent);
+  es.addEventListener('donation', handleDonationEvent);
+  es.onmessage = handleDonationEvent;
 
   es.onerror = (error) => {
     console.warn("[SSE] Peringatan: Koneksi terputus atau gagal terhubung. EventSource akan otomatis mereconnect.");
