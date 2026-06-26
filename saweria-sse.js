@@ -4,7 +4,7 @@ const { Order } = require('./database');
 function startSaweriaSSE(bot, onPaymentSuccess) {
   const streamKey = process.env.SAWERIA_STREAM_KEY;
   if (!streamKey) {
-    console.warn("[WS] SAWERIA_STREAM_KEY tidak ditemukan di .env. Sistem Overlay (WebSocket) dinonaktifkan.");
+    console.warn("[WS] SAWERIA_STREAM_KEY tidak ditemukan di .env. Sistem Overlay dinonaktifkan.");
     return;
   }
 
@@ -13,18 +13,32 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
   
   let ws;
   let reconnectTimer;
+  let heartbeatTimer;
 
   const connect = () => {
     ws = new WebSocket(url);
 
+    const resetHeartbeat = () => {
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      // Saweria sends pong every ~25 seconds, so we timeout at 45 seconds
+      heartbeatTimer = setTimeout(() => {
+        console.warn("[WS] KONEKSI ZOMBIE TERDETEKSI! Tidak ada respon dari server selama 45 detik. Mere-start koneksi...");
+        ws.terminate(); // terminate will trigger 'close' event
+      }, 45000);
+    };
+
     ws.on('open', () => {
       console.log("[WS] Berhasil terhubung ke WebSocket Overlay Saweria. Menunggu pembayaran...");
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      resetHeartbeat();
     });
 
     ws.on('message', async (data) => {
       try {
+        resetHeartbeat(); // Setiap ada pesan (termasuk pong), reset timer zombie
+        
         const payload = JSON.parse(data.toString());
+        
         // event donation structure from Saweria WS
         if (payload && payload.type === 'donation' && Array.isArray(payload.data)) {
           for (const item of payload.data) {
@@ -42,14 +56,25 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
               const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
               
               if (order) {
-                console.log(`[WS] Ditemukan Order PENDING: ${order._id}. Memproses pesanan secara kilat!`);
-                
-                // Buat mock ctx karena onPaymentSuccess butuh ctx.telegram
-                const mockCtx = { telegram: bot.telegram };
-                
-                // Memanggil fungsi sukses yang ada di index.js
-                await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
-                console.log(`[WS] Order ${order._id} berhasil diproses via WebSockets!`);
+                // Validasi keamanan: Pastikan jumlah yang dibayar SESUAI dengan tagihan
+                if (item.amount < order.total_amount) {
+                  console.log(`[WS] PERINGATAN KEAMANAN: UID ${userId} mencoba membayar Rp${item.amount} untuk tagihan Rp${order.total_amount}. Ditolak!`);
+                  
+                  const textKurang = `⚠️ *PEMBAYARAN TIDAK SESUAI*\n\nSistem mendeteksi dana masuk sebesar *Rp${item.amount}*, namun total tagihan pesanan Anda adalah *Rp${order.total_amount}*.\n\nPesanan otomatis DIBATALKAN karena nominal tidak sesuai. Silakan hubungi admin jika terjadi kesalahan.`;
+                  bot.telegram.sendMessage(userId, textKurang, { parse_mode: "Markdown" }).catch(() => {});
+                  
+                  // Opsional: Langsung ubah status order ke FAILED
+                  await Order.findByIdAndUpdate(order._id, { status: 'FAILED' });
+                } else {
+                  console.log(`[WS] Ditemukan Order PENDING: ${order._id}. Memproses pesanan secara kilat!`);
+                  
+                  // Buat mock ctx karena onPaymentSuccess butuh ctx.telegram
+                  const mockCtx = { telegram: bot.telegram };
+                  
+                  // Memanggil fungsi sukses yang ada di index.js
+                  await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
+                  console.log(`[WS] Order ${order._id} berhasil diproses via WebSockets!`);
+                }
               } else {
                 console.log(`[WS] Pesanan PENDING tidak ditemukan untuk UID ${userId}. Mungkin sudah sukses via polling.`);
               }
@@ -70,12 +95,13 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
 
     ws.on('close', () => {
       console.warn("[WS] Peringatan: Koneksi terputus. Mencoba menghubungkan kembali dalam 5 detik...");
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
       reconnectTimer = setTimeout(connect, 5000);
     });
 
     ws.on('error', (error) => {
       console.error("[WS] WebSocket Error:", error.message);
-      ws.close();
+      ws.terminate();
     });
   };
 
