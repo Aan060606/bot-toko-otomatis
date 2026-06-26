@@ -74,7 +74,7 @@ async function calculateDynamicDiscount(user) {
     return { percentage: 10, title: 'Khusus Member VIP' };
   }
   
-  if (purchaseCount === 0 && daysSinceJoin > 30) {
+  if (purchaseCount === 0 && daysSinceJoin > 7) {
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
     const prevBigDiscounts = await Discount.countDocuments({
       target_user_id: user._id,
@@ -88,7 +88,7 @@ async function calculateDynamicDiscount(user) {
     return { percentage: 50, title: 'Spesial Comeback 50%' };
   }
   
-  if (purchaseCount === 0 && daysSinceJoin <= 30) {
+  if (purchaseCount === 0 && daysSinceJoin <= 7) {
     return { percentage: 20, title: 'Diskon Khusus 20%' };
   }
   
