@@ -2,7 +2,9 @@ const WebSocket = require('ws');
 const { Order } = require('./database');
 
 function startSaweriaSSE(bot, onPaymentSuccess) {
-  const streamKey = process.env.SAWERIA_STREAM_KEY;
+  const rawKey = process.env.SAWERIA_STREAM_KEY || '';
+  const streamKey = rawKey.replace(/['"]/g, '').trim();
+
   if (!streamKey) {
     console.warn("[WS] SAWERIA_STREAM_KEY tidak ditemukan di .env. Sistem Overlay dinonaktifkan.");
     return;
@@ -16,7 +18,13 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
   let heartbeatTimer;
 
   const connect = () => {
-    ws = new WebSocket(url);
+    // Menambahkan header User-Agent & Origin untuk menghindari blokir 403 (Cloudflare/Anti-DDoS)
+    ws = new WebSocket(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Origin': 'https://saweria.co'
+      }
+    });
 
     const resetHeartbeat = () => {
       if (heartbeatTimer) clearTimeout(heartbeatTimer);
