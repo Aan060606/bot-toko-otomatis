@@ -56,7 +56,7 @@ async function sawPost(url, body) {
       headers: {
         'Origin': 'https://saweria.co',
         'Referer': 'https://saweria.co/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'curl/8.5.0'
       }
     });
     return res.data;
@@ -71,7 +71,7 @@ async function sawGet(url) {
       headers: {
         'Origin': 'https://saweria.co',
         'Referer': 'https://saweria.co/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'curl/8.5.0'
       }
     });
     return res.data;
