@@ -1553,7 +1553,7 @@ bot.command("testpay", async (ctx) => {
 
 if (process.env.NODE_ENV !== "test") {
   startSaweriaSSE(bot, onPaymentSuccess);
-  bot.launch()
+  bot.launch({ dropPendingUpdates: true })
     .then(() => {
       logger.success("Bot Toko Otomatis berjalan!");
       // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
