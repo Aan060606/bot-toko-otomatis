@@ -1458,7 +1458,10 @@ async function showStoreMenu(ctx) {
     
     if (discount) {
       const finalPrice = Math.max(0, p.price - discount.deduction);
-      btnText = `🛒 Beli ${p.name} • ${strikethrough(formatK(p.price))} ➔ Rp${formatK(finalPrice)}`;
+      const originalK = formatK(p.price);
+      const numPart = originalK.replace('k', '');
+      const kPart = originalK.includes('k') ? 'k' : '';
+      btnText = `🛒 Beli ${p.name} • ${strikethrough(numPart)}${kPart}  ➔  Rp${formatK(finalPrice)}`;
     }
     
     buttons.push([Markup.button.callback(btnText, `buy_now_${p._id}`)]);
