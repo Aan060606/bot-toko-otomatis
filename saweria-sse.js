@@ -1,4 +1,4 @@
-const EventSource = require('eventsource');
+const { EventSource } = require('eventsource');
 const { Order } = require('./database');
 
 function startSaweriaSSE(bot, onPaymentSuccess) {
