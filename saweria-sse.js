@@ -46,6 +46,14 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
         } else {
           console.log(`[SSE] Pesanan PENDING tidak ditemukan untuk UID ${userId}. Mungkin sudah sukses via polling.`);
         }
+      } else {
+        // Jika tidak ada [UID:xxx], kemungkinan ini adalah "Test Notifikasi" dari dashboard Saweria
+        // Atau donasi manual dari luar bot
+        console.log(`[SSE] Menerima donasi/test tanpa UID dari ${data.donator}.`);
+        if (process.env.ADMIN_CHAT_ID) {
+          const text = `🔔 *KONEKSI SSE AMAN!*\nBot berhasil menangkap sinyal (Test/Manual) dari Saweria Overlay:\n\nDari: ${data.donator}\nJumlah: Rp${data.amount}\nPesan: ${msg}\n\n_Ini membuktikan sistem "Respon Kilat" sudah terhubung sempurna!_`;
+          bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }).catch(() => {});
+        }
       }
     } catch (e) {
       console.error("[SSE] Error saat memproses event donations:", e.message);
