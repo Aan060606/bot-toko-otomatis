@@ -4,9 +4,6 @@ dns.setDefaultResultOrder("ipv4first");
 
 const { Telegraf, Markup, session } = require("telegraf");
 const axios = require("axios");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-puppeteer.use(StealthPlugin());
 
 const QRCode = require("qrcode");
 const fs = require("fs");
@@ -51,77 +48,36 @@ async function replySafe(ctx, text, options) {
   }
 }
 
-let browserInstance = null;
-let bgPage = null;
 
-async function getBgPage() {
-  if (!browserInstance) {
-    logger.info("Membuka Headless Browser (Puppeteer Stealth)...");
-    browserInstance = await puppeteer.launch({
-      headless: "new",
-      protocolTimeout: 1200000,
-      args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox', 
-        '--disable-dev-shm-usage', 
-        '--disable-gpu',
-        '--disable-web-security'
-      ]
-    });
-    
-    browserInstance.on('disconnected', () => {
-      logger.warn("Browser terputus/crash! Mengatur ulang instance...");
-      browserInstance = null;
-      bgPage = null;
-    });
-  }
-  
-  if (!bgPage || bgPage.isClosed()) {
-    bgPage = await browserInstance.newPage();
-    await bgPage.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
-    try { await bgPage.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
-    logger.info("Background page siap!");
-  }
-  
-  return bgPage;
-}
-
-async function executeFetch(page, method, url, body) {
-  const reqFn = async (fetchUrl, fetchMethod, fetchBody) => {
-    const options = {
-      method: fetchMethod,
-      headers: { 'Origin': 'https://saweria.co', 'Referer': 'https://saweria.co/' }
-    };
-    if (fetchBody) {
-      options.headers['Content-Type'] = 'application/json';
-      options.body = JSON.stringify(fetchBody);
-    }
-    const response = await fetch(fetchUrl, options);
-    return { status: response.status, body: await response.text() };
-  };
-  
-  let res = await page.evaluate(reqFn, url, method, body);
-  
-  // Jika kena block Cloudflare lagi (HTML Just a moment)
-  if (res.body.includes('<!DOCTYPE html>') && res.body.includes('Just a moment')) {
-     logger.warn("Terkena challenge Cloudflare. Mengambil clearance ulang...");
-     await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
-     try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
-     res = await page.evaluate(reqFn, url, method, body);
-  }
-  
-  if (res.status >= 400) throw new Error(`Saweria API Error (${res.status}): ${res.body.slice(0, 200)}`);
-  return JSON.parse(res.body);
-}
 
 async function sawPost(url, body) {
-  const page = await getBgPage();
-  return executeFetch(page, 'POST', url, body);
+  try {
+    const res = await axios.post(url, body, {
+      headers: {
+        'Origin': 'https://saweria.co',
+        'Referer': 'https://saweria.co/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+    return res.data;
+  } catch (err) {
+    throw new Error(`Saweria API Error: ${err.response?.data ? JSON.stringify(err.response.data) : err.message}`);
+  }
 }
 
 async function sawGet(url) {
-  const page = await getBgPage();
-  return executeFetch(page, 'GET', url, null);
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        'Origin': 'https://saweria.co',
+        'Referer': 'https://saweria.co/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+    return res.data;
+  } catch (err) {
+    throw new Error(`Saweria API Error: ${err.response?.data ? JSON.stringify(err.response.data) : err.message}`);
+  }
 }
 
 
