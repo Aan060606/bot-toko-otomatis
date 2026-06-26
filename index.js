@@ -1446,7 +1446,6 @@ async function showStoreMenu(ctx) {
   const buttons = [];
   
   const formatK = (num) => num >= 1000 ? (num/1000) + 'k' : num.toString();
-  const strikethrough = (str) => str.split('').join('\u0336') + '\u0336';
 
   for (const p of products) {
     if (p.preview_url) {
@@ -1458,7 +1457,7 @@ async function showStoreMenu(ctx) {
     
     if (discount) {
       const finalPrice = Math.max(0, p.price - discount.deduction);
-      btnText = `🛒 Beli ${p.name} • ${strikethrough(formatK(p.price))} - Rp${formatK(finalPrice)}`;
+      btnText = `🛒 Beli ${p.name} • Rp${formatK(p.price)} ➔ Rp${formatK(finalPrice)}`;
     }
     
     buttons.push([Markup.button.callback(btnText, `buy_now_${p._id}`)]);
