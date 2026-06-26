@@ -1562,11 +1562,14 @@ if (process.env.NODE_ENV !== "test") {
     .catch((err) => {
       if (err.message && err.message.includes('409')) {
         logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
-        // Retry after 5 seconds
+        // Retry after 15 seconds instead of crashing
         setTimeout(() => {
           logger.info("Mencoba restart bot...");
-          bot.launch().then(() => logger.success("Bot berhasil restart!")).catch(e => logger.error("Gagal restart:", e.message));
-        }, 5000);
+          bot.launch({ dropPendingUpdates: true }).then(() => logger.success("Bot berhasil restart!")).catch(e => {
+            logger.error("Gagal restart:", e.message);
+            // Jangan process.exit(1) agar Webhook tetap hidup!
+          });
+        }, 15000);
       } else {
         logger.error("Gagal menjalankan bot:", err.message);
         process.exit(1);
