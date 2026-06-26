@@ -1,33 +1,17 @@
-require('dotenv').config();
-const { EventSource } = require('eventsource');
-
-const streamKey = "32c03b468255e6ff6d8926b48d4d4fa8";
-if (!streamKey) {
-  console.log("Error: SAWERIA_STREAM_KEY kosong di .env");
-  process.exit(1);
-}
-
-const url = `https://backend.saweria.co/stream?streamKey=${streamKey}`;
-console.log("Mencoba konek ke:", url);
-
-const es = new EventSource(url);
-
-es.onopen = () => {
-  console.log("✅ BERHASIL TERHUBUNG KE SAWERIA!");
-  console.log("Silakan pencet tombol 'Munculkan notifikasi' di web Saweria sekarang...");
-};
-
-es.addEventListener('donations', (event) => {
-  console.log("📥 EVENT DONATIONS DITERIMA:");
-  console.log(event.data);
+const WebSocket = require('ws');
+const streamKey = '32c03b468255e6ff6d8926b48d4d4fa8';
+const url = `wss://events.saweria.co/stream?streamKey=${streamKey}`;
+const ws = new WebSocket(url, {
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Origin': 'https://saweria.co'
+  }
 });
-
-es.addEventListener('message', (event) => {
-  console.log("📥 EVENT MESSAGE DITERIMA:");
-  console.log(event.data);
-});
-
-setTimeout(() => {
-  console.log("Waktu test habis (60s). Keluar.");
+ws.on('open', () => {
+  console.log('Connected!');
   process.exit(0);
-}, 60000);
+});
+ws.on('error', (err) => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});

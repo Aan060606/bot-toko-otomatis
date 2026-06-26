@@ -15,8 +15,9 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
     return;
   }
 
+  const maskedKey = streamKey.substring(0, 5) + '...' + streamKey.slice(-5);
   const url = `wss://events.saweria.co/stream?streamKey=${streamKey}`;
-  console.log(`[WS] Menghubungkan ke Overlay Saweria...`);
+  console.log(`[WS] Menghubungkan ke Overlay Saweria... (Key: ${maskedKey})`);
   
   let ws;
   let reconnectTimer;
@@ -29,6 +30,15 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Origin': 'https://saweria.co'
       }
+    });
+
+    // Tangkap body dari error 403 untuk mengetahui alasan penolakan
+    ws.on('unexpected-response', (request, response) => {
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => {
+        console.error(`[WS] Server menolak koneksi dengan HTTP ${response.statusCode}. Body:`, body.substring(0, 500));
+      });
     });
 
     const resetHeartbeat = () => {
