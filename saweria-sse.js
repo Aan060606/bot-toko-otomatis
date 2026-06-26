@@ -3,7 +3,12 @@ const { Order } = require('./database');
 
 function startSaweriaSSE(bot, onPaymentSuccess) {
   const rawKey = process.env.SAWERIA_STREAM_KEY || '';
-  const streamKey = rawKey.replace(/['"]/g, '').trim();
+  let streamKey = rawKey.replace(/['"]/g, '').trim();
+
+  // Jika user secara tidak sengaja memasukkan URL lengkap, kita ekstrak streamKey-nya
+  if (streamKey.includes('streamKey=')) {
+    streamKey = streamKey.split('streamKey=')[1].split('&')[0];
+  }
 
   if (!streamKey) {
     console.warn("[WS] SAWERIA_STREAM_KEY tidak ditemukan di .env. Sistem Overlay dinonaktifkan.");
