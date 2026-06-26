@@ -1500,6 +1500,11 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     const qrMsg = await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
 
     const statusMsg = await ctx.replyWithMarkdown(`⏳ *Menunggu Pembayaran...*\nSistem akan memproses pesanan otomatis setelah pembayaran sukses.`);
+
+    await Order.findByIdAndUpdate(orderId, {
+      qr_msg_id: qrMsg ? qrMsg.message_id : null,
+      status_msg_id: statusMsg ? statusMsg.message_id : null
+    });
     
     activeIntervals[donation.id] = pollPaymentStatus(ctx, donation.id, ctx.chat.id, statusMsg.message_id, orderId, qrMsg ? qrMsg.message_id : null);
   } catch (err) {
@@ -1615,7 +1620,7 @@ if (process.env.NODE_ENV !== "test") {
                   } else {
                     console.log(`[WEBHOOK] Memproses order ${order._id}`);
                     const mockCtx = { telegram: bot.telegram };
-                    await onPaymentSuccess(mockCtx, userId, null, order.donation_id, order._id, null);
+                    await onPaymentSuccess(mockCtx, userId, order.status_msg_id, order.donation_id, order._id, order.qr_msg_id);
                   }
                 }
               } else {

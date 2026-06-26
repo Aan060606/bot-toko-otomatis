@@ -51,6 +51,8 @@ const OrderSchema = new mongoose.Schema({
   total_amount: Number,
   status: { type: String, default: 'PENDING' },
   discount_id: { type: String, ref: 'Discount' },
+  status_msg_id: Number,
+  qr_msg_id: Number,
   success_processed_at: Date,
   created_at: { type: Date, default: Date.now }
 });
