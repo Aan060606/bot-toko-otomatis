@@ -175,6 +175,38 @@ async function applyAutomaticDiscount(userId, productId, basePrice) {
   return bestDiscount;
 }
 
+async function getMenuDiscountText(userId) {
+  const user = await User.findById(userId).lean();
+  if (!user) return "";
+
+  const now = new Date();
+  const activeDiscounts = await Discount.find({
+    active: true,
+    $and: [
+      { $or: [{ valid_until: null }, { valid_until: { $gt: now } }] },
+      { $or: [{ target_user_id: null }, { target_user_id: userId }] }
+    ]
+  }).lean();
+
+  let texts = [];
+  for (const d of activeDiscounts) {
+    if (d.max_uses > 0 && d.used_count >= d.max_uses) continue;
+    
+    const valText = d.type === 'PERCENTAGE' ? `${d.value}%` : `Rp${d.value.toLocaleString('id-ID')}`;
+    
+    if (d.trigger_event === 'FIRST_TIME' && user.purchase_count === 0) {
+      texts.push(`🎁 *SPESIAL PENGGUNA BARU:* Potongan Harga ${valText}!`);
+    } else if (d.trigger_event === 'LOYALTY' && user.purchase_count >= 5) {
+      texts.push(`💎 *MEMBER LOYAL:* Anda berhak mendapat Diskon ${valText}!`);
+    } else if (!d.trigger_event || d.trigger_event === 'ALL') {
+      texts.push(`🔥 *PROMO SPESIAL:* Diskon ${valText} Langsung!`);
+    }
+  }
+
+  if (texts.length === 0) return "";
+  return "\n\n" + texts.join("\n");
+}
+
 module.exports = {
   getActiveProducts,
   addToCart,
@@ -187,5 +219,6 @@ module.exports = {
   getSetting,
   setSetting,
   getOrder,
-  applyAutomaticDiscount
+  applyAutomaticDiscount,
+  getMenuDiscountText
 };
