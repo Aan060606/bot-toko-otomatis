@@ -1584,10 +1584,13 @@ if (process.env.NODE_ENV !== "test") {
         try {
           const payload = JSON.parse(body);
           console.log("[WEBHOOK] Raw Payload:", body);
-          if ((payload.type === "donation" || payload.type === "test") && payload.data) {
-            // Saweria webhook data bisa berupa array atau object tunggal
-            const items = Array.isArray(payload.data) ? payload.data : [payload.data];
-            
+          
+          let items = [];
+          if (payload.data && Array.isArray(payload.data)) items = payload.data;
+          else if (payload.data) items = [payload.data];
+          else items = [payload]; // Kadang payload langsung di root
+
+          if (items.length > 0) {
             for (const item of items) {
               const amount = parseInt(item.amount);
               const donator = item.donator_name || item.donator || "Seseorang";
@@ -1615,7 +1618,11 @@ if (process.env.NODE_ENV !== "test") {
               } else {
                 if (process.env.ADMIN_CHAT_ID) {
                   const text = `🔔 *WEBHOOK SAWERIA AMAN!*\nBot menerima sinyal (Test/Manual):\nDari: ${donator}\nJumlah: Rp${amount}\nPesan: ${msg}\n\n_Sistem Webhook berjalan sempurna!_`;
-                  bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" }).catch(() => {});
+                  bot.telegram.sendMessage(process.env.ADMIN_CHAT_ID, text, { parse_mode: "Markdown" })
+                    .then(() => console.log("[WEBHOOK] Pesan sukses dikirim ke admin!"))
+                    .catch((e) => console.error("[WEBHOOK] GAGAL kirim ke admin:", e.message));
+                } else {
+                  console.log("[WEBHOOK] ADMIN_CHAT_ID tidak disetting.");
                 }
               }
             }
