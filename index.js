@@ -12,6 +12,7 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 
+const { startSaweriaSSE } = require("./saweria-sse");
 const { User, Product, Stock, Cart, Order, OrderItem, Setting, UserEvent, Discount, BroadcastLog } = require("./database");
 const store = require("./store");
 const admin = require("./admin");
@@ -1483,7 +1484,8 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     const baseAmount = calculateBaseAmount(amount);
     
     // Kirim harga dasar ke Saweria. Saweria akan otomatis menambahkan fee QRIS (Payment Gateway) di atas harga dasar ini.
-    const donation = await createDonation(baseAmount, "pembeli@bot.com", buyerName, "Beli " + productId);
+    const donationMessage = "Beli " + productId + " [UID:" + userId + "]";
+    const donation = await createDonation(baseAmount, "pembeli@bot.com", buyerName, donationMessage);
     
     // donation.amount_raw berisi harga akhir = Base Amount + Fee QRIS dari Saweria
     const finalAmount = donation.amount_raw || baseAmount;
@@ -1550,6 +1552,7 @@ bot.command("testpay", async (ctx) => {
 });
 
 if (process.env.NODE_ENV !== "test") {
+  startSaweriaSSE(bot, onPaymentSuccess);
   bot.launch()
     .then(() => {
       logger.success("Bot Toko Otomatis berjalan!");
