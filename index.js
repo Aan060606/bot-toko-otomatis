@@ -216,8 +216,10 @@ async function notifyAdmin(text) {
 }
 
 async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId) {
+  logger.info(`[PAYMENT] Memproses pembayaran sukses untuk Order ID ${orderId}`);
   stopPolling(donationId);
   if (qrMsgId) {
+    logger.info(`[PAYMENT] Menghapus pesan QR Code (${qrMsgId}) di chat ${chatId}`);
     try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
   }
   
@@ -252,6 +254,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     }
 
     await notifyAdmin(`💳 *PESANAN SELESAI*\n\nOrder ID: \`${orderId}\`\nRef: \`${donationId}\``);
+    logger.success(`[PAYMENT] Produk berhasil dikirim ke User ${chatId} untuk Order ID ${orderId}`);
     
     // Update User CRM Stats
     const order = await Order.findById(orderId).lean();
@@ -1480,6 +1483,7 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   if (items.length === 0) return ctx.reply("❌ Produk tidak tersedia!");
 
   let amount = await store.getCartTotal(userId);
+  logger.info(`[CHECKOUT] User ${userId} memulai checkout untuk product ${productId} seharga ${amount}`);
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
@@ -1508,6 +1512,8 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
 
     const qrPath = await generateQRImage(donation.qr_string, donation.id);
     try { await ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id); } catch (e) {}
+
+    logger.success(`[CHECKOUT] QR Code sukses dibuat untuk Order ID ${orderId}`);
     
     const caption = `🧾 *Detail Pembayaran*\n\nOrder ID: \`${orderId}\`\n💵 *Harga Asli: ${formatRupiah(items[0].price)}*${discountInfo}\n💸 *Pajak Platform & QRIS: ${formatRupiah(finalAmount - amount)}*\n💳 *Total Bayar: ${formatRupiah(finalAmount)}*\n\n📱 Scan QR ini menggunakan aplikasi E-Wallet / M-Banking Anda.\n\n⏳ Berlaku 15 menit.`;
     const qrMsg = await sendPhotoToTelegram(ctx.chat.id, qrPath, caption);
