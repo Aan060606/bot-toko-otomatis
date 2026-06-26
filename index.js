@@ -1552,7 +1552,7 @@ bot.command("testpay", async (ctx) => {
 });
 
 if (process.env.NODE_ENV !== "test") {
-  startSaweriaSSE(bot, onPaymentSuccess);
+  // startSaweriaSSE(bot, onPaymentSuccess); // Dinonaktifkan karena sudah pindah ke Webhook
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
       logger.success("Bot Toko Otomatis berjalan!");
