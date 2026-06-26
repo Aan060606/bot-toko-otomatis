@@ -1583,7 +1583,8 @@ if (process.env.NODE_ENV !== "test") {
       req.on("end", async () => {
         try {
           const payload = JSON.parse(body);
-          if (payload.type === "donation" && payload.data) {
+          console.log("[WEBHOOK] Raw Payload:", body);
+          if ((payload.type === "donation" || payload.type === "test") && payload.data) {
             // Saweria webhook data bisa berupa array atau object tunggal
             const items = Array.isArray(payload.data) ? payload.data : [payload.data];
             
