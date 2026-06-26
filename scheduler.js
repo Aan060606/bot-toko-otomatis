@@ -39,8 +39,12 @@ async function getMsg(key, defaultMsg) {
   return await getSetting('marketing_' + key, defaultMsg);
 }
 
+function formatK(num) {
+  return num >= 1000 ? (num / 1000) + 'k' : num.toString();
+}
+
 function strikeThrough(text) {
-  return text.split('').map(char => char + '\u0336').join('');
+  return text.split('').join('\u0336') + '\u0336';
 }
 
 function buildProductMarkup(product, discountAmount = 0) {
@@ -48,13 +52,15 @@ function buildProductMarkup(product, discountAmount = 0) {
   if (product.preview_url) {
     buttons.push([Markup.button.url(`📺 Preview Content ${product.name}`, product.preview_url)]);
   }
-  
+
   if (discountAmount > 0 && product.price > discountAmount) {
-    const finalPrice = product.price - discountAmount;
-    const oldPriceStr = strikeThrough(formatRupiah(product.price));
-    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} ${oldPriceStr} ➡️ ${formatRupiah(finalPrice)}`, `buy_now_${product._id}`)]);
+    const finalPrice = Math.max(0, product.price - discountAmount);
+    const originalK = formatK(product.price);
+    const numPart = originalK.replace('k', '');
+    const kPart = originalK.includes('k') ? 'k' : '';
+    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} • ${strikeThrough(numPart)}${kPart}  ➔  Rp${formatK(finalPrice)}`, `buy_now_${product._id}`)]);
   } else {
-    buttons.push([Markup.button.callback(`🛒 Beli ${product.name} - ${formatRupiah(product.price)}`, `buy_now_${product._id}`)]);
+    buttons.push([Markup.button.callback(`🛒 Beli ${product.name} • Rp${formatK(product.price)}`, `buy_now_${product._id}`)]);
   }
   return Markup.inlineKeyboard(buttons);
 }
