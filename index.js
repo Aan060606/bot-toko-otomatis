@@ -58,6 +58,7 @@ async function getBgPage() {
     logger.info("Membuka Headless Browser (Puppeteer Stealth)...");
     browserInstance = await puppeteer.launch({
       headless: "new",
+      protocolTimeout: 1200000,
       args: [
         '--no-sandbox', 
         '--disable-setuid-sandbox', 
