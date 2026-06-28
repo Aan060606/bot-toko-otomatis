@@ -1123,9 +1123,9 @@ bot.action("discount_ui_list", async (ctx) => {
   
   let text = `🎟️ *Daftar Diskon Manual*\n\n`;
   discounts.forEach(d => {
-    text += `🔹 *${d.code}* [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
+    text += `🔹 \`${d.code}\` [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
     text += `Tipe: ${d.type} (${d.value}${d.type === 'PERCENTAGE' ? '%' : ' IDR'})\n`;
-    text += `Trigger: ${d.trigger_event || 'ALL'}\n`;
+    text += `Trigger: \`${d.trigger_event || 'ALL'}\`\n`;
     text += `Terpakai: ${d.used_count} / ${d.max_uses > 0 ? d.max_uses : 'Unlimited'}\n\n`;
   });
   return ctx.reply(text, { parse_mode: 'Markdown' });
