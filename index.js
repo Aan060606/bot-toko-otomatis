@@ -417,6 +417,8 @@ bot.use(async (ctx, next) => {
 const clickCooldowns = new Map();
 bot.on('callback_query', async (ctx, next) => {
   if (ctx.from) {
+    if (admin.isAdmin(ctx)) return next(); // Abaikan cooldown untuk Admin
+
     const userId = ctx.from.id;
     const now = Date.now();
     const lastClick = clickCooldowns.get(userId) || 0;
@@ -1091,8 +1093,24 @@ bot.action("admin_discount", async (ctx) => {
   const kb = Markup.inlineKeyboard([
     [Markup.button.callback("➕ Buat Diskon Baru", "discount_ui_create")],
     [Markup.button.callback("📋 Daftar Diskon", "discount_ui_list")],
-    [Markup.button.callback("🔙 Kembali", "admin_main")]
+    [Markup.button.callback("🔙 Kembali", "admin_marketing_menu")]
   ]);
+  return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
+});
+
+bot.action("admin_orders", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.answerCbQuery();
+  const recentOrders = await Order.find({ status: 'SUCCESS' }).sort({ _id: -1 }).limit(10).lean();
+  let text = `📊 *10 Pesanan Sukses Terakhir*\n\n`;
+  if (recentOrders.length === 0) {
+    text += "Belum ada pesanan sukses.";
+  } else {
+    recentOrders.forEach(o => {
+      text += `ID: \`${o._id}\`\nTotal: ${formatRupiah(o.total_amount)}\nWaktu: ${o.success_processed_at ? o.success_processed_at.toLocaleString('id-ID') : new Date().toLocaleString('id-ID')}\n\n`;
+    });
+  }
+  const kb = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_shop_menu")]]);
   return ctx.editMessageText(text, { parse_mode: "Markdown", ...kb });
 });
 
