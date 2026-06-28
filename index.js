@@ -1122,13 +1122,46 @@ bot.action("discount_ui_list", async (ctx) => {
   if (discounts.length === 0) return ctx.reply("Belum ada diskon manual yang dibuat.");
   
   let text = `🎟️ *Daftar Diskon Manual*\n\n`;
+  const buttons = [];
   discounts.forEach(d => {
     text += `🔹 \`${d.code}\` [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
     text += `Tipe: ${d.type} (${d.value}${d.type === 'PERCENTAGE' ? '%' : ' IDR'})\n`;
     text += `Trigger: \`${d.trigger_event || 'ALL'}\`\n`;
     text += `Terpakai: ${d.used_count} / ${d.max_uses > 0 ? d.max_uses : 'Unlimited'}\n\n`;
+    
+    buttons.push([
+      Markup.button.callback(d.active ? `⏸️ Matikan ${d.code}` : `▶️ Aktifkan ${d.code}`, `toggle_discount_${d.code}`),
+      Markup.button.callback(`🗑️ Hapus ${d.code}`, `del_discount_${d.code}`)
+    ]);
   });
-  return ctx.reply(text, { parse_mode: 'Markdown' });
+  
+  buttons.push([Markup.button.callback("🔙 Kembali", "admin_discount")]);
+  const kb = Markup.inlineKeyboard(buttons);
+  
+  return ctx.reply(text, { parse_mode: 'Markdown', ...kb });
+});
+
+bot.action(/^toggle_discount_(.+)$/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const code = ctx.match[1];
+  const d = await Discount.findOne({ code });
+  if (d) {
+    d.active = !d.active;
+    await d.save();
+    await ctx.answerCbQuery(`Diskon ${code} ${d.active ? 'diaktifkan' : 'dimatikan'}!`, { show_alert: true });
+    // Hapus pesan lama dan panggil ulang list
+    try { await ctx.deleteMessage(); } catch(e){}
+    return bot.handleUpdate({ ...ctx.update, callback_query: { ...ctx.callbackQuery, data: 'discount_ui_list' } });
+  }
+});
+
+bot.action(/^del_discount_(.+)$/, async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  const code = ctx.match[1];
+  await Discount.deleteOne({ code });
+  await ctx.answerCbQuery(`Diskon ${code} berhasil dihapus!`, { show_alert: true });
+  try { await ctx.deleteMessage(); } catch(e){}
+  return bot.handleUpdate({ ...ctx.update, callback_query: { ...ctx.callbackQuery, data: 'discount_ui_list' } });
 });
 
 bot.action("discount_ui_create", async (ctx) => {
