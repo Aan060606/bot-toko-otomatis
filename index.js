@@ -1117,10 +1117,11 @@ bot.action("admin_orders", async (ctx) => {
 bot.action("discount_ui_list", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   await ctx.answerCbQuery();
-  const discounts = await Discount.find().lean();
-  if (discounts.length === 0) return ctx.reply("Belum ada diskon yang dibuat.");
+  // Hanya ambil diskon manual (yang punya kode), bukan diskon dinamis buatan mesin marketing
+  const discounts = await Discount.find({ code: { $exists: true, $ne: null } }).lean();
+  if (discounts.length === 0) return ctx.reply("Belum ada diskon manual yang dibuat.");
   
-  let text = `🎟️ *Daftar Diskon Otomatis*\n\n`;
+  let text = `🎟️ *Daftar Diskon Manual*\n\n`;
   discounts.forEach(d => {
     text += `🔹 *${d.code}* [${d.active ? 'Aktif' : 'Nonaktif'}]\n`;
     text += `Tipe: ${d.type} (${d.value}${d.type === 'PERCENTAGE' ? '%' : ' IDR'})\n`;
