@@ -248,13 +248,21 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     try {
       await ctx.telegram.editMessageText(chatId, msgId, null, deliveryText, {
         parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main")]])
+        ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main_keep")]])
       });
     } catch (err) {
-      await ctx.telegram.sendMessage(chatId, deliveryText, {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main")]])
-      });
+      logger.warn(`[PAYMENT] editMessageText gagal (${err.message}). Fallback ke sendMessage.`);
+      try {
+        await ctx.telegram.sendMessage(chatId, deliveryText, {
+          parse_mode: "Markdown",
+          ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main_keep")]])
+        });
+      } catch (err2) {
+        logger.error(`[PAYMENT] sendMessage fallback GAGAL (${err2.message}). Mengirim tanpa Markdown!`);
+        await ctx.telegram.sendMessage(chatId, deliveryText.replace(/[*_`\[\]()]/g, ""), {
+          ...Markup.inlineKeyboard([[Markup.button.callback("🏠 Menu Utama", "menu_main_keep")]])
+        });
+      }
     }
 
     await notifyAdmin(`💳 *PESANAN SELESAI*\n\nOrder ID: \`${orderId}\`\nRef: \`${donationId}\``);
@@ -1484,6 +1492,13 @@ bot.start(async (ctx) => {
 bot.action("menu_main", async (ctx) => {
   await ctx.answerCbQuery();
   try { await ctx.deleteMessage(); } catch(e) {}
+  return showStoreMenu(ctx);
+});
+
+bot.action("menu_main_keep", async (ctx) => {
+  await ctx.answerCbQuery();
+  // Sama seperti menu_main, TAPI JANGAN HAPUS PESAN INI! 
+  // Agar link produk yang dibeli pembeli tidak hilang saat mereka klik kembali ke menu.
   return showStoreMenu(ctx);
 });
 
