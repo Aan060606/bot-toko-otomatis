@@ -784,7 +784,7 @@ async function getCampaignMetrics() {
 function startCron(bot) {
   if (cronTimer) clearInterval(cronTimer);
 
-  cronTimer = setInterval(async () => {
+  const checkMarketing = async () => {
     // Jalankan setiap jam 10 Pagi WIB (UTC+7)
     const now = new Date();
     const utcHours = now.getUTCHours();
@@ -830,7 +830,7 @@ function startCron(bot) {
     if (jakartaHour === 23 && lastCronDate !== today + '_metrics') {
       lastCronDate = today + '_metrics';
       try {
-        const adminId = process.env.ADMIN_ID;
+        const adminId = process.env.ADMIN_ID || process.env.ADMIN_CHAT_ID;
         if (adminId) {
           const metricsMsg = await getCampaignMetrics();
           await bot.telegram.sendMessage(adminId, metricsMsg, { parse_mode: 'Markdown' });
@@ -839,8 +839,14 @@ function startCron(bot) {
         console.error('[CRON] Gagal kirim metrics harian:', err);
       }
     }
-  }, 1000 * 60 * 60); // Cek setiap jam
-  console.log('[CRON] Marketing Scheduler started. Berjalan tiap jam 10.00 WIB.');
+  };
+
+  // Langsung jalankan sekali saat bot baru menyala agar tidak perlu menunggu 1 jam pertama
+  checkMarketing();
+  
+  // Set jadwal cek setiap 1 jam kemudian
+  cronTimer = setInterval(checkMarketing, 1000 * 60 * 60);
+  console.log('[CRON] Marketing Scheduler started. Berjalan tiap jam 10.00 WIB (dan langsung saat restart).');
 }
 
 function setMarketingEnabled(val) { marketingEnabled = val; }
