@@ -84,10 +84,8 @@ async function fulfillOrder(orderId) {
   
   for (const item of items) {
     for(let i=0; i<item.quantity; i++) {
-      const stock = await Stock.findOneAndUpdate(
-        { product_id: item.product_id, status: 'AVAILABLE' },
-        { $set: { status: 'SOLD', order_id: orderId, fulfilled_at: new Date() } }
-      ).lean();
+      // Ambil isi stok pertama tanpa mengubah statusnya menjadi SOLD (Jadikan Stok Unlimited / Permanen)
+      const stock = await Stock.findOne({ product_id: item.product_id }).lean();
       if (stock) {
         deliveredStocks.push({
           product_id: item.product_id,
