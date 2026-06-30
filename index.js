@@ -641,7 +641,8 @@ bot.command("run_marketing", async (ctx) => {
   await ctx.reply("🚀 Menjalankan campaign marketing otomatis...\n\nProses berjalan di background. Laporan akan dikirim setelah selesai.");
   
   try {
-    const stats = await scheduler.runMarketingCampaign(bot);
+    const today = new Date().toDateString() + '_manual_' + Date.now();
+    const stats = await scheduler.runMarketingCampaign(bot, today);
     if (stats.skipped && stats.reason) {
       return ctx.reply(`⚠️ Campaign tidak jalan: ${stats.reason}`);
     }

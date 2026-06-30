@@ -131,6 +131,7 @@ async function sendSafe(bot, userId, text, options = {}) {
 
 // Cek apakah user pernah dikirimi broadcast dalam 3 hari terakhir (Anti-Spam Shield)
 function isInCooldown(user) {
+  if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false; // Admin kebal cooldown untuk testing
   if (!user.last_broadcast_at) return false;
   const daysSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60 * 24);
   return daysSinceLast < 3;
