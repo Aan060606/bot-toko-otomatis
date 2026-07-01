@@ -1712,7 +1712,7 @@ if (process.env.NODE_ENV !== "test") {
 
           if (items.length > 0) {
             for (const item of items) {
-              const amount = parseInt(item.amount);
+              const amount = parseInt(item.amount_raw || item.amount);
               const donator = item.donator_name || item.donator || "Seseorang";
               const msg = item.message || "";
               
