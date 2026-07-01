@@ -981,8 +981,13 @@ bot.action(/marketing_action_(on|off|run|test|setmsg)/, async (ctx) => {
     return ctx.reply("❌ Automasi Marketing dimatikan.");
   } else if (action === 'run') {
     ctx.reply("▶️ Memaksa Marketing jalan sekarang...");
-    const stats = await scheduler.runDripFollowUp();
-    return ctx.reply(`✅ Selesai. Stats: ${JSON.stringify(stats)}`);
+    try {
+      const today = new Date().toDateString() + '_manual_' + Date.now();
+      const stats = await scheduler.runMarketingCampaign(bot, today);
+      return ctx.reply(`✅ Selesai. Stats: ${JSON.stringify(stats)}`);
+    } catch (err) {
+      return ctx.reply(`❌ Gagal: ${err.message}`);
+    }
   } else if (action === 'test') {
     ctx.reply("🧪 Mengirim test marketing ke Anda...");
     await bot.telegram.sendMessage(ctx.from.id, "*[PREVIEW]* Halo! Ini contoh pesan edukasi", { parse_mode: 'Markdown' });
