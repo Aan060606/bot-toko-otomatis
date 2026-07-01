@@ -1763,6 +1763,19 @@ if (process.env.NODE_ENV !== "test") {
   }).listen(PORT, () => {
     logger.info(`🌐 HTTP Server & Webhook berjalan di port ${PORT}`);
   });
+
+  // Graceful shutdown
+  process.once('SIGINT', () => {
+    logger.info('Menerima SIGINT, mematikan bot...');
+    bot.stop('SIGINT');
+    require('mongoose').disconnect();
+  });
+  
+  process.once('SIGTERM', () => {
+    logger.info('Menerima SIGTERM, mematikan bot...');
+    bot.stop('SIGTERM');
+    require('mongoose').disconnect();
+  });
 }
 
 module.exports = {
