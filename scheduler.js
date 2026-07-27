@@ -100,7 +100,7 @@ async function calculateDynamicDiscount(user) {
 
 async function sendSafe(bot, userId, text, options = {}) {
   try {
-    const extra = { parse_mode: 'Markdown' };
+    const extra = { parse_mode: 'HTML' };
     if (options.keyboard && options.keyboard.reply_markup) {
       extra.reply_markup = options.keyboard.reply_markup;
     } else if (options.keyboard) {
@@ -166,44 +166,43 @@ async function classifyNonBuyer(user) {
 
 async function runNonBuyerCampaign(bot) {
   // ─ CART ABANDON: User udah mau beli tapi kabur ─
-  // Angle: Sayang banget kalau sampai kabur, ini bukan channel repost biasa!
   const msgCartAbandon = await getMsg('cart_abandon',
-    '\uD83D\uDD34 *Bos, Anda Hampir Dapat Akses {produk}!*\n\n' +
-    'Jangan sampai Anda menyesal — ini bukan channel JAV biasa.\n\n' +
-    '\uD83C\uDDEE\uD83C\uDDE9 *Subtitle Indonesia dikerjakan sendiri oleh tim kami*\n' +
-    'Bukan repost, bukan auto-sub. Hasil terjemahan manusia, bukan mesin.\n\n' +
-    '_Slot VIP Anda masih tersimpan selama beberapa menit ke depan._\n\n' +
-    '\u{1F447} Selesaikan Pembayaran Sekarang'
+    `🔴 <b>Bos, Anda Hampir Dapat Akses {produk}!</b>\n\n` +
+    `Jangan sampai Anda menyesal — ini bukan channel JAV biasa.\n\n` +
+    `🇮🇩 <b>Subtitle Indonesia dikerjakan sendiri oleh tim kami</b>\n` +
+    `<i>Bukan repost, bukan auto-sub. Hasil terjemahan manusia, bukan mesin.</i>\n\n` +
+    `<blockquote>Slot VIP Anda masih tersimpan selama beberapa menit ke depan.</blockquote>\n\n` +
+    `👇 <b>Selesaikan Pembayaran Sekarang</b>`
   );
 
   // ─ INACTIVE: Sudah lama tidak buka bot ─
   // Angle: Update subtitle terus bertambah, makin banyak kalau nunggu!
   const msgInactive = await getMsg('inactive',
-    '\uD83C\uDDEE\uD83C\uDDE9 *Update Subtitle Baru {produk} Sudah Keluar!*\n\n' +
-    'Tim J-SUB Collection baru saja selesai menerjemahkan batch subtitle baru.\n\n' +
-    '\uD83C\uDFAC Puluhan video baru + subtitle Indo eksklusif\n' +
-    '\uD83D\uDD0D Cari & request video langsung via bot\n' +
-    '\u2705 Bukan repost — subtitle dikerjakan manual oleh admin\n\n' +
-    '_Semakin banyak koleksi = harga VIP akan naik. Sekarang masih harga opening._\n\n' +
-    '\u{1F447} Gabung VIP Sekarang'
+    `🇮🇩 <b>Update Subtitle Baru {produk} Sudah Keluar!</b>\n\n` +
+    `Tim J-SUB Collection baru saja selesai menerjemahkan batch subtitle baru.\n\n` +
+    `🎬 Puluhan video baru + subtitle Indo eksklusif\n` +
+    `🔍 Cari & request video langsung via bot\n` +
+    `✅ Bukan repost — subtitle dikerjakan manual oleh admin\n\n` +
+    `<blockquote>Semakin banyak koleksi = harga VIP akan naik. Sekarang masih harga opening.</blockquote>\n\n` +
+    `👇 <b>Gabung VIP Sekarang</b>`
   );
 
   // ─ COLD LEAD: Belum pernah klik beli ─
   // Angle: Social proof + unique value yang tidak ada di tempat lain
   const msgColdLead = await getMsg('cold_lead',
-    '\uD83C\uDF1F *Kenapa 3.200+ Member Pilih {produk}?*\n\n' +
-    'Satu alasan utama: *Subtitle Indonesia buatan sendiri.*\n\n' +
-    'Di luar sana banyak channel JAV, tapi hampir semua:\n' +
-    '\u274C Repost dari channel lain\n' +
-    '\u274C Subtitle mesin (tidak akurat)\n' +
-    '\u274C Tidak ada yang bisa di-request\n\n' +
-    'Di {produk}:\n' +
-    '\u2705 Subtitle 100% dikerjakan tim sendiri\n' +
-    '\u2705 Request video via bot, langsung diproses\n' +
-    '\u2705 Cari video via bot, tanpa scroll capek\n' +
-    '\u2705 Akses permanen, bayar sekali\n\n' +
-    '_Harga opening DISKON berlangsung. Segera naik seiring koleksi bertambah._\n\n' +
-    '\u{1F447} Amankan Akses VIP Sekarang'
+    `🌟 <b>Kenapa 3.200+ Member Pilih {produk}?</b>\n\n` +
+    `Satu alasan utama: <b>Subtitle Indonesia buatan sendiri.</b>\n\n` +
+    `Di luar sana banyak channel JAV, tapi hampir semua:\n` +
+    `❌ Repost dari channel lain\n` +
+    `❌ Subtitle mesin (tidak akurat)\n` +
+    `❌ Tidak ada yang bisa di-request\n\n` +
+    `Di <b>{produk}</b>:\n` +
+    `✅ Subtitle 100% dikerjakan tim sendiri\n` +
+    `✅ Request video via bot, langsung diproses\n` +
+    `✅ Cari video via bot, tanpa scroll capek\n` +
+    `✅ Akses permanen, bayar sekali\n\n` +
+    `<blockquote>Harga opening DISKON berlangsung. Segera naik seiring koleksi bertambah.</blockquote>\n\n` +
+    `👇 <b>Amankan Akses VIP Sekarang</b>`
   );
 
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
@@ -499,21 +498,21 @@ async function runDripFollowUp(bot) {
 
       // Stage 2: PANIC + PERSONAL. Nama user dipanggil, unique value ditonjolkan!
       const msg = log.variant === 'B'
-        ? `\uD83D\uDCF9 *${user.first_name || 'Bos'}, Ini Yang Anda Lewatkan di ${productName}:*\n\n` +
+        ? `📹 <b>${user.first_name || 'Bos'}, Ini Yang Anda Lewatkan di ${productName}:</b>\n\n` +
           `Baru saja tim kami selesai translate subtitle untuk 5 video baru.\n` +
           `Member VIP sudah bisa nonton. Anda belum.\n\n` +
-          `\uD83C\uDDEE\uD83C\uDDE9 Subtitle Indonesia manual (bukan mesin)\n` +
-          `\uD83D\uDD0D Request & cari video via bot 24 jam\n` +
-          `\u267E\uFE0F Akses selamanya, bayar sekali\n\n` +
-          `_Channel masih baru = harga masih opening. Sebentar lagi naik._\n\n` +
-          `\u{1F447} Gabung Sebelum Harga Naik`
-        : `\u26A0\uFE0F *${user.first_name || 'Bos'}, Slot VIP Menyempit!*\n\n` +
-          `${productName} bukan channel repost biasa.\n` +
+          `🇮🇩 Subtitle Indonesia manual (bukan mesin)\n` +
+          `🔍 Request & cari video via bot 24 jam\n` +
+          `♾️ Akses selamanya, bayar sekali\n\n` +
+          `<blockquote>Channel masih baru = harga masih opening. Sebentar lagi naik.</blockquote>\n\n` +
+          `👇 <b>Gabung Sebelum Harga Naik</b>`
+        : `⚠️ <b>${user.first_name || 'Bos'}, Slot VIP Menyempit!</b>\n\n` +
+          `<b>${productName}</b> bukan channel repost biasa.\n` +
           `Semua subtitle Indo dikerjakan manual oleh tim kami.\n\n` +
           `Fakta: harga akan naik otomatis seiring koleksi bertambah.\n` +
           `Sekarang masih harga opening terbaik.\n\n` +
-          `_Jangan tunda lagi — rugi kalau bayar lebih mahal nanti._\n\n` +
-          `\u{1F447} Kunci Harga Opening Sekarang`;
+          `<blockquote>Jangan tunda lagi — rugi kalau bayar lebih mahal nanti.</blockquote>\n\n` +
+          `👇 <b>Kunci Harga Opening Sekarang</b>`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product);
@@ -571,21 +570,21 @@ async function runDripFollowUp(bot) {
       
       // Psikologi Stage 3: PERSONAL DISCOUNT + TRUST. Diskon terasa eksklusif untuk dia saja!
       const msg = log.variant === 'B'
-        ? `\uD83D\uDC8C *${user.first_name || 'Bos'}, Ini Pesan Pribadi dari Tim Kami*\n\n` +
+        ? `💌 <b>${user.first_name || 'Bos'}, Ini Pesan Pribadi dari Tim Kami</b>\n\n` +
           `Kami perhatikan Anda sudah 2x melihat ${product ? product.name : 'channel kami'} tapi belum bergabung.\n\n` +
           `Kami ingin Anda di dalam, jadi kami siapkan:\n\n` +
-          `\uD83C\uDF81 *Kupon Diskon ${discountRule.percentage}% - Khusus untuk Anda*\n` +
-          `\u23F0 Berlaku hanya 72 jam ke depan\n\n` +
-          `_Harga sudah otomatis terpotong di tombol di bawah._\n\n` +
-          `\u{1F447} Pakai Diskon Saya Sekarang`
-        : `\uD83D\uDCA5 *FLASH DEAL: Diskon ${discountRule.percentage}% Untuk ${user.first_name || 'Anda'}!*\n\n` +
+          `🎁 <b>Kupon Diskon ${discountRule.percentage}% - Khusus untuk Anda</b>\n` +
+          `⏳ <i>Berlaku hanya 72 jam ke depan</i>\n\n` +
+          `<blockquote>Harga sudah otomatis terpotong di tombol di bawah.</blockquote>\n\n` +
+          `👇 <b>Pakai Diskon Saya Sekarang</b>`
+        : `💥 <b>FLASH DEAL: Diskon ${discountRule.percentage}% Untuk ${user.first_name || 'Anda'}!</b>\n\n` +
           `Sistem kami secara otomatis mendeteksi bahwa Anda layak mendapat harga spesial.\n\n` +
           `Ini yang Anda dapatkan:\n` +
-          `\u2705 Akses ${product ? product.name : 'VIP'} selamanya\n` +
-          `\u2705 Update harian JAV Sub Indo\n` +
-          `\u2705 Harga ${discountRule.percentage}% lebih murah dari harga normal\n\n` +
-          `\u23F0 *Kupon hangus dalam 72 jam. Tidak bisa diperpanjang.*\n\n` +
-          `\u{1F447} Klaim Diskon ${discountRule.percentage}% Saya`;
+          `✅ Akses ${product ? product.name : 'VIP'} selamanya\n` +
+          `✅ Update harian JAV Sub Indo\n` +
+          `✅ Harga ${discountRule.percentage}% lebih murah dari harga normal\n\n` +
+          `<blockquote>Kupon hangus dalam 72 jam. Tidak bisa diperpanjang.</blockquote>\n\n` +
+          `👇 <b>Klaim Diskon ${discountRule.percentage}% Saya</b>`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product, discountAmount);
@@ -641,6 +640,11 @@ async function runDripFollowUp(bot) {
          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
          continue;
       }
+
+      const msgStage4 = `🚨 <b>KESEMPATAN TERAKHIR: DISKON CUCI GUDANG 70%!</b>\n\n` +
+                        `Ini adalah penawaran terakhir dan paling gila dari kami untuk <b>{produk}</b>.\n` +
+                        `Jika Anda melewatkan ini, penawaran tidak akan pernah muncul lagi.\n\n` +
+                        `<blockquote>Klaim diskon 70% Anda sekarang sebelum akses ditutup selamanya.</blockquote>`;
 
       let finalMsg = msgStage4.replace(/{produk}/g, product.name);
       const discountAmount = Math.floor(product.price * 0.7); // 70%
