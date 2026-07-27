@@ -669,6 +669,37 @@ async function runDripFollowUp(bot) {
     }
   }
 
+  // === Stage 5 (Recycling): Masukkan ulang ke pipeline setelah 14 hari ===
+  const fourteenDaysAgoForReset = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const stage4Logs = await DripLog.find({
+    stage: 4,
+    converted: false,
+    sent_at: { $lte: fourteenDaysAgoForReset }
+  }).lean();
+
+  for (const log of stage4Logs) {
+    try {
+      const user = await User.findById(log.user_id).lean();
+      if (!user || user.is_blocked || user.purchase_count > 0) {
+        // Jika ternyata sudah beli atau diblokir, tutup saja selamanya
+        await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'CLEANUP' });
+        continue;
+      }
+
+      // Reset user ke stage 0 agar masuk pipeline dari awal lagi!
+      // Kita set sent_at ke 'now' supaya besok baru dikirim stage 1-nya
+      await DripLog.findByIdAndUpdate(log._id, { 
+        stage: 0, 
+        sent_at: new Date(),
+        variant: Math.random() > 0.5 ? 'A' : 'B' // Ganti varian (A/B testing)
+      });
+      console.log(`[DRIP] ♻️ Mereset user ${log.user_id} dari Stage 4 kembali ke awal pipeline!`);
+      stats.recycled = (stats.recycled || 0) + 1;
+    } catch (err) {
+      console.error('[DRIP] Error mereset Stage 4', err);
+    }
+  }
+
   return stats;
 }
 
