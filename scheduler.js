@@ -21,12 +21,15 @@
 
 const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult, CronProgress } = require('./database');
 const { Markup } = require('telegraf');
+const cron = require('node-cron');
+let previewModule = null;
+try { previewModule = require('./preview'); } catch(e) { /* preview module optional */ }
 
 const formatRupiah = (angka) => 'Rp' + angka.toLocaleString('id-ID');
 
 let marketingEnabled = true;
-let cronTimer = null;
-let lastCronDate = null; // Guard untuk mencegah double-fire di jam 10
+let cronTasks = []; // Array of node-cron tasks (restart-proof)
+let lastCronDate = null; // Still used for manual/startup run guard
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
@@ -58,9 +61,9 @@ function buildProductMarkup(product, discountAmount = 0) {
     const originalK = formatK(product.price);
     const numPart = originalK.replace('k', '');
     const kPart = originalK.includes('k') ? 'k' : '';
-    buttons.push([Markup.button.callback(`🎁 Beli ${product.name} • ${strikeThrough(numPart)}${kPart}  ➔  Rp${formatK(finalPrice)}`, `buy_now_${product._id}`)]);
+    buttons.push([Markup.button.callback(`💥 SIKAT DISKON! ${strikeThrough(numPart)}${kPart} ➔ Rp${formatK(finalPrice)}`, `buy_now_${product._id}`)]);
   } else {
-    buttons.push([Markup.button.callback(`🛒 Beli ${product.name} • Rp${formatK(product.price)}`, `buy_now_${product._id}`)]);
+    buttons.push([Markup.button.callback(`🔥 AMANKAN AKSES VIP (Rp${formatK(product.price)})`, `buy_now_${product._id}`)]);
   }
   return Markup.inlineKeyboard(buttons);
 }
@@ -129,12 +132,12 @@ async function sendSafe(bot, userId, text, options = {}) {
   }
 }
 
-// Cek apakah user pernah dikirimi broadcast dalam 3 hari terakhir (Anti-Spam Shield)
+// Cek apakah user pernah dikirimi broadcast dalam 6 jam terakhir (Anti-Spam Shield Fast-Paced)
 function isInCooldown(user) {
   if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false; // Admin kebal cooldown untuk testing
   if (!user.last_broadcast_at) return false;
-  const daysSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60 * 24);
-  return daysSinceLast < 3;
+  const hoursSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60);
+  return hoursSinceLast < 6;
 }
 
 // ─── CAMPAIGN 1: NON-BUYER ──────────────────────────────────────────────────
@@ -144,9 +147,9 @@ async function classifyNonBuyer(user) {
   const lastEvent = await UserEvent.findOne({ user_id: user._id }).sort({ created_at: -1 }).lean();
   
   if (lastEvent && lastEvent.event_type === 'CHECKOUT') {
-    // Batasi Cart Abandonment hanya untuk event dalam 30 hari terakhir (Mitigasi Blast)
-    const daysSinceCheckout = (new Date() - new Date(lastEvent.created_at)) / (1000 * 60 * 60 * 24);
-    if (daysSinceCheckout <= 30) {
+    const hoursSinceCheckout = (new Date() - new Date(lastEvent.created_at)) / (1000 * 60 * 60);
+    // Upgrade 1: Cart Abandonment instan jika > 30 menit (0.5 jam) tapi < 30 hari
+    if (hoursSinceCheckout >= 0.5 && hoursSinceCheckout <= 30 * 24) {
       return 'CART_ABANDON';
     }
   }
@@ -162,23 +165,45 @@ async function classifyNonBuyer(user) {
 }
 
 async function runNonBuyerCampaign(bot) {
+  // ─ CART ABANDON: User udah mau beli tapi kabur ─
+  // Angle: Sayang banget kalau sampai kabur, ini bukan channel repost biasa!
   const msgCartAbandon = await getMsg('cart_abandon',
-    '\u26A0\uFE0F *Selesaikan Transaksi {produk}*\n\n' +
-    '\u27DF Jangan lewatkan update terbaru\n\n' +
-    '\u{1F447} Lanjut di bawah'
+    '\uD83D\uDD34 *Bos, Anda Hampir Dapat Akses {produk}!*\n\n' +
+    'Jangan sampai Anda menyesal — ini bukan channel JAV biasa.\n\n' +
+    '\uD83C\uDDEE\uD83C\uDDE9 *Subtitle Indonesia dikerjakan sendiri oleh tim kami*\n' +
+    'Bukan repost, bukan auto-sub. Hasil terjemahan manusia, bukan mesin.\n\n' +
+    '_Slot VIP Anda masih tersimpan selama beberapa menit ke depan._\n\n' +
+    '\u{1F447} Selesaikan Pembayaran Sekarang'
   );
 
+  // ─ INACTIVE: Sudah lama tidak buka bot ─
+  // Angle: Update subtitle terus bertambah, makin banyak kalau nunggu!
   const msgInactive = await getMsg('inactive',
-    '\u2728 *Koleksi {produk} Rilis!*\n\n' +
-    '\u27DF Ratusan update panas minggu ini\n\n' +
-    '\u{1F447} Cek sekarang'
+    '\uD83C\uDDEE\uD83C\uDDE9 *Update Subtitle Baru {produk} Sudah Keluar!*\n\n' +
+    'Tim J-SUB Collection baru saja selesai menerjemahkan batch subtitle baru.\n\n' +
+    '\uD83C\uDFAC Puluhan video baru + subtitle Indo eksklusif\n' +
+    '\uD83D\uDD0D Cari & request video langsung via bot\n' +
+    '\u2705 Bukan repost — subtitle dikerjakan manual oleh admin\n\n' +
+    '_Semakin banyak koleksi = harga VIP akan naik. Sekarang masih harga opening._\n\n' +
+    '\u{1F447} Gabung VIP Sekarang'
   );
 
+  // ─ COLD LEAD: Belum pernah klik beli ─
+  // Angle: Social proof + unique value yang tidak ada di tempat lain
   const msgColdLead = await getMsg('cold_lead',
-    '\u23F3 *Promo Perdana {produk}! (24 Jam)*\n\n' +
-    '\u27DF Ribuan konten update tiap hari\n' +
-    '\u27DF Sekali bayar, aktif selamanya\n\n' +
-    '\u{1F447} Amankan sekarang'
+    '\uD83C\uDF1F *Kenapa 3.200+ Member Pilih {produk}?*\n\n' +
+    'Satu alasan utama: *Subtitle Indonesia buatan sendiri.*\n\n' +
+    'Di luar sana banyak channel JAV, tapi hampir semua:\n' +
+    '\u274C Repost dari channel lain\n' +
+    '\u274C Subtitle mesin (tidak akurat)\n' +
+    '\u274C Tidak ada yang bisa di-request\n\n' +
+    'Di {produk}:\n' +
+    '\u2705 Subtitle 100% dikerjakan tim sendiri\n' +
+    '\u2705 Request video via bot, langsung diproses\n' +
+    '\u2705 Cari video via bot, tanpa scroll capek\n' +
+    '\u2705 Akses permanen, bayar sekali\n\n' +
+    '_Harga opening DISKON berlangsung. Segera naik seiring koleksi bertambah._\n\n' +
+    '\u{1F447} Amankan Akses VIP Sekarang'
   );
 
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
@@ -216,6 +241,14 @@ async function runNonBuyerCampaign(bot) {
   for (const user of nonBuyers) {
     if (isInCooldown(user)) { stats.skipped++; continue; }
 
+    if (defaultProduct) {
+      const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(defaultProduct._id), converted: false }).lean();
+      if (existingDrip) {
+        stats.skipped++;
+        continue; // Jangan spam Campaign 1 jika user masih dalam Funnel (Stage 1, 2, 3)
+      }
+    }
+
     const segment = await classifyNonBuyer(user);
     let msg = segment === 'CART_ABANDON' ? msgCartAbandon
                : segment === 'INACTIVE'     ? msgInactive
@@ -225,6 +258,15 @@ async function runNonBuyerCampaign(bot) {
       msg = msg.replace(/\{produk\}/g, defaultProduct.name);
     }
 
+    // 🔥 KIRIM PREVIEW DULU sebelum teks promo (bila ada cache preview dari grup VIP)
+    // Ini membuat user melihat konten nyata sebelum pitch = konversi jauh lebih tinggi
+    if (previewModule) {
+      try {
+        await previewModule.sendPreviewToUser(bot, user._id, 3);
+        await delay(800); // Jeda sebentar agar preview tampil lebih dulu
+      } catch(e) { /* preview gagal = skip saja, jangan crash campaign */ }
+    }
+
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
     if (result.ok) {
       if (segment === 'CART_ABANDON') stats.abandon++;
@@ -232,17 +274,26 @@ async function runNonBuyerCampaign(bot) {
       else stats.cold++;
 
       if (defaultProduct) {
-        const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(defaultProduct._id), converted: false }).lean();
-        if (!existingDrip) {
-          await DripLog.create({
-            user_id: user._id,
-            product_id: String(defaultProduct._id),
-            campaign_type: 'NON_BUYER',
-            stage: 1,
-            sent_at: new Date(),
-            variant: Math.random() > 0.5 ? 'A' : 'B'
+        // Upgrade 2: Berikan Diskon 10% sejak Stage 1 untuk CART_ABANDON agar segera convert
+        let initialDiscount = 0;
+        if (segment === 'CART_ABANDON') {
+          initialDiscount = 10;
+          await Discount.create({
+            target_user_id: Number(user._id),
+            type: 'PERCENTAGE',
+            value: initialDiscount,
+            valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
           });
         }
+
+        await DripLog.create({
+          user_id: user._id,
+          product_id: String(defaultProduct._id),
+          campaign_type: 'NON_BUYER',
+          stage: 1,
+          sent_at: new Date(),
+          variant: Math.random() > 0.5 ? 'A' : 'B'
+        });
       }
     } else {
       stats.failed++;
@@ -390,7 +441,7 @@ async function runCrossSellCampaign(bot, allProducts) {
   return stats;
 }
 
-// ─── CAMPAIGN 3: DRIP FOLLOW-UP (Stage 2 & 3) ──────────────────────────────
+// ─── CAMPAIGN 3: DRIP FOLLOW-UP (BERTINGKAT) ───────────────────────────────
 
 async function runDripFollowUp(bot) {
   const stats = { stage2: 0, stage3: 0, skipped: 0, failed: 0 };
@@ -407,15 +458,16 @@ async function runDripFollowUp(bot) {
     console.error('[DRIP] Gagal eksekusi 90-day hard cap:', err);
   }
 
-  const threeDaysAgo = new Date(now.getTime() - (3 * 24 * 60 * 60 * 1000));
+  const sixHoursAgo = new Date(now.getTime() - (6 * 60 * 60 * 1000));
+  const twelveHoursAgo = new Date(now.getTime() - (12 * 60 * 60 * 1000));
 
   const hType = await getSetting("header_type", "url");
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
-  // === Stage 2: Kirim urgensi ke yang sudah 3 hari di stage 1 dan belum beli ===
+  // === Stage 2: Kirim urgensi ke yang sudah 6 jam di stage 1 dan belum beli ===
   const stage1Logs = await DripLog.find({
     stage: 1,
-    sent_at: { $lte: threeDaysAgo },
+    sent_at: { $lte: sixHoursAgo },
     converted: false
   }).lean();
 
@@ -445,9 +497,23 @@ async function runDripFollowUp(bot) {
       const product = await Product.findById(log.product_id).lean();
       const productName = product ? product.name : 'produk pilihan kami';
 
+      // Stage 2: PANIC + PERSONAL. Nama user dipanggil, unique value ditonjolkan!
       const msg = log.variant === 'B'
-        ? `\u26A0\uFE0F *Peringatan Terakhir, ${user.first_name || 'Bos'}!*\n\nPromo ${productName} akan ditutup.\n\n\u{1F447} Sikat sekarang`
-        : `\u23F3 *Promo ${productName} Mau Habis!*\n\n\u27DF Slot sangat terbatas\n\n\u{1F447} Amankan segera`;
+        ? `\uD83D\uDCF9 *${user.first_name || 'Bos'}, Ini Yang Anda Lewatkan di ${productName}:*\n\n` +
+          `Baru saja tim kami selesai translate subtitle untuk 5 video baru.\n` +
+          `Member VIP sudah bisa nonton. Anda belum.\n\n` +
+          `\uD83C\uDDEE\uD83C\uDDE9 Subtitle Indonesia manual (bukan mesin)\n` +
+          `\uD83D\uDD0D Request & cari video via bot 24 jam\n` +
+          `\u267E\uFE0F Akses selamanya, bayar sekali\n\n` +
+          `_Channel masih baru = harga masih opening. Sebentar lagi naik._\n\n` +
+          `\u{1F447} Gabung Sebelum Harga Naik`
+        : `\u26A0\uFE0F *${user.first_name || 'Bos'}, Slot VIP Menyempit!*\n\n` +
+          `${productName} bukan channel repost biasa.\n` +
+          `Semua subtitle Indo dikerjakan manual oleh tim kami.\n\n` +
+          `Fakta: harga akan naik otomatis seiring koleksi bertambah.\n` +
+          `Sekarang masih harga opening terbaik.\n\n` +
+          `_Jangan tunda lagi — rugi kalau bayar lebih mahal nanti._\n\n` +
+          `\u{1F447} Kunci Harga Opening Sekarang`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product);
@@ -469,10 +535,10 @@ async function runDripFollowUp(bot) {
     }
   }
 
-  // === Stage 3: Final reminder + diskon khusus ke yang sudah 3 hari di stage 2 ===
+  // === Stage 3: Final reminder + diskon khusus ke yang sudah 12 jam di stage 2 ===
   const stage2Logs = await DripLog.find({
     stage: 2,
-    sent_at: { $lte: threeDaysAgo },
+    sent_at: { $lte: twelveHoursAgo },
     converted: false
   }).lean();
 
@@ -503,9 +569,23 @@ async function runDripFollowUp(bot) {
       const discountRule = await calculateDynamicDiscount(user);
       const discountAmount = product ? Math.floor(product.price * (discountRule.percentage / 100)) : 0;
       
+      // Psikologi Stage 3: PERSONAL DISCOUNT + TRUST. Diskon terasa eksklusif untuk dia saja!
       const msg = log.variant === 'B'
-        ? `\u{1F6A8} *Waktu Terbatas!*\n\nDiskon ${discountRule.percentage}% untuk ${product ? product.name : 'produk ini'} khusus hari ini.\n\n\u{1F447} Jangan sampai kelewatan`
-        : `\u{1F48E} *${discountRule.title}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
+        ? `\uD83D\uDC8C *${user.first_name || 'Bos'}, Ini Pesan Pribadi dari Tim Kami*\n\n` +
+          `Kami perhatikan Anda sudah 2x melihat ${product ? product.name : 'channel kami'} tapi belum bergabung.\n\n` +
+          `Kami ingin Anda di dalam, jadi kami siapkan:\n\n` +
+          `\uD83C\uDF81 *Kupon Diskon ${discountRule.percentage}% - Khusus untuk Anda*\n` +
+          `\u23F0 Berlaku hanya 72 jam ke depan\n\n` +
+          `_Harga sudah otomatis terpotong di tombol di bawah._\n\n` +
+          `\u{1F447} Pakai Diskon Saya Sekarang`
+        : `\uD83D\uDCA5 *FLASH DEAL: Diskon ${discountRule.percentage}% Untuk ${user.first_name || 'Anda'}!*\n\n` +
+          `Sistem kami secara otomatis mendeteksi bahwa Anda layak mendapat harga spesial.\n\n` +
+          `Ini yang Anda dapatkan:\n` +
+          `\u2705 Akses ${product ? product.name : 'VIP'} selamanya\n` +
+          `\u2705 Update harian JAV Sub Indo\n` +
+          `\u2705 Harga ${discountRule.percentage}% lebih murah dari harga normal\n\n` +
+          `\u23F0 *Kupon hangus dalam 72 jam. Tidak bisa diperpanjang.*\n\n` +
+          `\u{1F447} Klaim Diskon ${discountRule.percentage}% Saya`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product, discountAmount);
@@ -514,12 +594,13 @@ async function runDripFollowUp(bot) {
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
         
-        // Simpan riwayat diskon yang diberikan
+        // Simpan riwayat diskon yang diberikan (72 jam = 3 hari agar user sempat pakai)
+        // FIX: target_user_id harus Number, valid_until 72 jam bukan 24 jam
         await Discount.create({
-          target_user_id: user._id,
+          target_user_id: Number(user._id),
           type: 'PERCENTAGE',
           value: discountRule.percentage,
-          valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000)
+          valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
         });
 
         stats.stage3++;
@@ -536,54 +617,54 @@ async function runDripFollowUp(bot) {
     }
   }
 
-  // === Stage 4: Down-sell (Produk Termurah) untuk user yang mengabaikan Stage 3 > 7 hari ===
+  
+  // === Stage 4 (Upgrade): Down-sell Ekstrem 70% untuk user yang abaikan Stage 3 > 7 hari ===
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const stage3Logs = await DripLog.find({
     stage: 3,
+    campaign_type: 'NON_BUYER', // SUPER PENTING: Hanya untuk yang belum pernah beli!
     sent_at: { $lte: sevenDaysAgo },
     converted: false
   }).lean();
 
   for (const log of stage3Logs) {
     try {
-      const defaultProduct = await Product.findOne({ active: 1 }).sort({ price: 1 }).lean();
-      if (defaultProduct && String(defaultProduct._id) !== String(log.product_id)) {
-        const user = await User.findById(log.user_id).lean();
-        if (!user || user.is_blocked) {
-          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
-          continue;
-        }
-
-        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-        const forceSend = new Date(log.sent_at) <= fourteenDaysAgo;
-        if (!forceSend && isInCooldown(user)) continue;
-
-        // Kalau ternyata user udah punya produk termurah ini
-        const boughtIds = await getBoughtProductIds(user._id);
-        if (boughtIds.includes(String(defaultProduct._id))) {
-          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
-          continue;
-        }
-
-        const msg = `\u{1F614} *Masih Ragu, ${user.first_name || 'Bos'}?*\n\n` +
-                    `Mungkin penawaran sebelumnya belum cocok untukmu saat ini.\n\n` +
-                    `Sebagai opsi paling hemat, cobalah *${defaultProduct.name}*!\n\n` +
-                    `\u27DF Harga sangat terjangkau\n` +
-                    `\u27DF Akses instan\n\n` +
-                    `\u{1F447} Coba opsi hemat ini`;
-
-        const keyboard = buildProductMarkup(defaultProduct);
-        const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
-        if (result.ok) {
-          await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
-          stats.stage4 = (stats.stage4 || 0) + 1;
-        } else {
-          stats.failed++;
-        }
-        await delay(1500);
+      const user = await User.findById(log.user_id).lean();
+      if (!user || user.is_blocked) {
+        await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+        continue;
       }
+      if (isInCooldown(user)) continue;
+
+      const product = await Product.findById(log.product_id).lean();
+      if (!product) {
+         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+         continue;
+      }
+
+      let finalMsg = msgStage4.replace(/{produk}/g, product.name);
+      const discountAmount = Math.floor(product.price * 0.7); // 70%
+      const keyboard = buildProductMarkup(product, discountAmount); 
+
+      const result = await sendSafe(bot, user._id, finalMsg, { media: hFile, mediaType: hType, keyboard });
+      if (result.ok) {
+        await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
+        
+        await Discount.create({
+          target_user_id: Number(user._id),
+          type: 'PERCENTAGE',
+          value: 70, // 70% discount for escape hatch
+          valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
+        });
+
+        stats.stage4 = (stats.stage4 || 0) + 1;
+      } else {
+        if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+        stats.failed++;
+      }
+      await delay(1500);
     } catch (err) {
-      console.error(`[DRIP] Error di Stage 4 untuk log ${log._id} (User: ${log.user_id}):`, err);
+      console.error('[DRIP] Error di Stage 4', err);
       continue;
     }
   }
@@ -593,16 +674,21 @@ async function runDripFollowUp(bot) {
 
 // Fungsi publik: tandai DripLog sebagai converted saat user beli
 // Dipanggil dari store.js saat fulfillOrder
-async function markDripConverted(userId) {
+async function markDripConverted(userId, amount = 0) {
   try {
     const logs = await DripLog.find({ user_id: userId, converted: false }).lean();
     for (const log of logs) {
-      await DripLog.findByIdAndUpdate(log._id, { converted: true });
+      await DripLog.findByIdAndUpdate(log._id, { 
+        converted: true,
+        $inc: { revenue_generated: amount },
+        exited_reason: 'PURCHASE'
+      });
       if (log.variant) {
         await ABTestResult.create({
           variant: log.variant,
           stage: log.stage,
           converted: true,
+          revenue_generated: amount,
           created_at: new Date()
         });
       }
@@ -620,7 +706,17 @@ async function runMarketingCampaign(bot, todayStr) {
   let progress = await CronProgress.findOne({ date: todayStr });
   if (!progress) progress = await CronProgress.create({ date: todayStr, campaign: 'START' });
 
-  let dripStats = { stage2: 0, stage3: 0, skipped: 0, failed: 0 };
+  // Upgrade 3: Peak Hours berdasarkan DATA REAL - jam pembayaran terbanyak
+  // Data: Jam 17 (7 bayar), 21 (3 bayar), 23 (2 bayar), 01 (3 bayar), 07 (3 bayar)
+  // Hari terbaik: Minggu, Senin, Selasa
+  const currentHour = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Jakarta'})).getHours();
+  const currentDay = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Jakarta'})).getDay(); // 0=Minggu, 1=Senin
+  // Peak hours: 07, 09, 12, 17, 21, 23, 01 (semua jam aktif user)
+  const isPeakHour = [7, 9, 12, 17, 21, 23, 1].includes(currentHour);
+  // Weekend boost: Sabtu-Senin kirim lebih agresif (hari dengan konversi tertinggi)
+  const isHighConversionDay = [0, 1, 2].includes(currentDay); // Minggu, Senin, Selasa
+
+  let dripStats = { stage2: 0, stage3: 0, stage4: 0, skipped: 0, failed: 0 };
   let nonBuyerStats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
   let vipCount = 0;
   let crossSellStats = { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
@@ -635,18 +731,22 @@ async function runMarketingCampaign(bot, todayStr) {
   if (progress.campaign === 'DRIP_DONE') {
     console.log('[MARKETING] Campaign 1: Non-Buyer...');
     nonBuyerStats = await runNonBuyerCampaign(bot);
-    await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'NON_BUYER_DONE' });
-    progress.campaign = 'NON_BUYER_DONE';
+    
+    // Only advance progress if it's a peak hour, so next campaigns can run later
+    if (isPeakHour || Object.values(nonBuyerStats).reduce((a,b)=>a+b,0) > 0) {
+      await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'NON_BUYER_DONE' });
+      progress.campaign = 'NON_BUYER_DONE';
+    }
   }
 
-  if (progress.campaign === 'NON_BUYER_DONE') {
+  if (progress.campaign === 'NON_BUYER_DONE' && isPeakHour) {
     console.log('[MARKETING] Campaign VIP Win-Back...');
     vipCount = await runVIPWinBackCampaign(bot);
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'VIP_DONE' });
     progress.campaign = 'VIP_DONE';
   }
 
-  if (progress.campaign === 'VIP_DONE') {
+  if (progress.campaign === 'VIP_DONE' && isPeakHour) {
     const allProducts = await Product.find({ active: 1 }).lean();
     console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
     crossSellStats = await runCrossSellCampaign(bot, allProducts);
@@ -661,10 +761,14 @@ async function runMarketingCampaign(bot, todayStr) {
     complete: crossSellStats.complete,
     stage2: dripStats.stage2,
     stage3: dripStats.stage3,
+    stage4: dripStats.stage4,
     vipWinBack: vipCount,
     skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped,
     failed: nonBuyerStats.failed + crossSellStats.failed + dripStats.failed
   };
+
+  // Bersihkan user yang sudah nge-block (Auto-cleanup Upgrade 5)
+  try { await User.deleteMany({ is_blocked: true, purchase_count: { $in: [0, null] } }); } catch(e){}
 
   return combined;
 }
@@ -757,12 +861,16 @@ async function getCampaignMetrics() {
 
   const dripStats = await DripLog.aggregate([
     { $match: { sent_at: { $gte: startOfDay } } },
-    { $group: { _id: "$stage", total: { $sum: 1 }, converted: { $sum: { $cond: ["$converted", 1, 0] } } } }
+    { $group: { 
+      _id: "$stage", 
+      total: { $sum: 1 }, 
+      converted: { $sum: { $cond: ["$converted", 1, 0] } },
+      revenue: { $sum: "$revenue_generated" }
+    }}
   ]);
 
   const abStats = await ABTestResult.aggregate([
     { $match: { created_at: { $gte: startOfDay } } },
-    { $group: { _id: "$variant", conversions: { $sum: 1 } } }
   ]);
 
   let msg = `\u{1F4CA} *Laporan Marketing Harian*\n\n`;
@@ -782,77 +890,134 @@ async function getCampaignMetrics() {
 }
 
 function startCron(bot) {
-  if (cronTimer) clearInterval(cronTimer);
+  // Bersihkan semua task lama (anti-duplikasi)
+  cronTasks.forEach(t => t.destroy());
+  cronTasks = [];
 
-  const checkMarketing = async () => {
-    // Jalankan setiap jam 10 Pagi WIB (UTC+7)
+  // ── TASK 1: Marketing Campaign — Setiap jam tepat (restart-proof!) ──────────
+  // Format: 0 * * * * = Detik 0, Menit 0, Setiap Jam, Setiap Hari
+  const marketingTask = cron.schedule('0 * * * *', async () => {
+    if (!marketingEnabled) return;
     const now = new Date();
-    const utcHours = now.getUTCHours();
-    const jakartaHour = (utcHours + 7) % 24;
-    
-    const today = now.toDateString();
+    // Format: "2026-07-27" — daily key agar campaign berjalan tuntas dalam 1 hari
+    const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+    const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}`;
+    console.log(`[CRON] ⏰ Menjalankan Marketing Automations (${now.toISOString()})...`);
+    try {
+      const stats = await runMarketingCampaign(bot, todayHourStr);
+      if (stats.skipped) {
+        console.log('[CRON] Marketing diskip:', stats.reason);
+      } else {
+        console.log('[CRON] ✅ Marketing selesai. Stats:', JSON.stringify(stats));
+      }
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal menjalankan marketing:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
 
-    if (jakartaHour >= 10 && lastCronDate !== today) {
-      console.log(`[CRON] Menjalankan Marketing Automations (${now.toISOString()})...`);
+  // ── TASK 2: Database Backup — Setiap hari jam 02:00 WIB ────────────────────
+  const backupTask = cron.schedule('0 2 * * *', async () => {
+    console.log('[CRON] ⏰ Menjalankan Database Backup...');
+    try {
+      const { runDatabaseBackup } = require('./backup');
+      await runDatabaseBackup(bot);
+      console.log('[CRON] ✅ Backup selesai.');
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal menjalankan backup:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 3: Cleanup DripLogs Expired — Setiap hari jam 03:00 WIB ───────────
+  const cleanupTask = cron.schedule('0 3 * * *', async () => {
+    console.log('[CRON] ⏰ Menjalankan cleanup DripLogs...');
+    await cleanupConvertedDripLogs();
+    console.log('[CRON] ✅ Cleanup selesai.');
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 4: Laporan Harian — Setiap hari jam 23:00 WIB ─────────────────────
+  const metricsTask = cron.schedule('0 23 * * *', async () => {
+    console.log('[CRON] ⏰ Mengirim Laporan Harian...');
+    try {
+      const adminId = process.env.ADMIN_ID || process.env.ADMIN_CHAT_ID;
+      if (adminId) {
+        const metricsMsg = await getCampaignMetrics();
+        await bot.telegram.sendMessage(adminId, metricsMsg, { parse_mode: 'Markdown' });
+        console.log('[CRON] ✅ Laporan harian terkirim.');
+      }
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal kirim metrics harian:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 5: Reminder Diskon Mau Hangus — Setiap hari jam 20:00 WIB ─────────
+  const discountReminderTask = cron.schedule('0 20 * * *', async () => {
+    console.log('[CRON] ⏰ Mengirim reminder diskon mau hangus...');
+    try {
+      const sixHoursLater = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      const expiringDiscounts = await Discount.find({
+        valid_until: { $gt: new Date(), $lte: sixHoursLater },
+        used_count: 0
+      }).lean();
       
-      try {
-        const stats = await runMarketingCampaign(bot, today);
-        if (!stats.skipped) {
-          console.log('[CRON] Marketing selesai. Stats:', stats);
-        } else {
-          console.log('[CRON] Marketing diskip:', stats.reason);
-        }
+      const hType = await getSetting('header_type', 'url');
+      const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+      
+      for (const disc of expiringDiscounts) {
+        const user = await User.findById(disc.target_user_id).lean();
+        if (!user || user.is_blocked) continue;
         
-        // Tandai selesai hanya JIKA sukses tanpa crash
-        const progress = await CronProgress.findOne({ date: today });
-        if (progress && progress.completed) {
-          lastCronDate = today;
-        }
-      } catch (err) {
-        console.error('[CRON] Gagal menjalankan marketing:', err);
+        const product = await Product.findOne({ active: 1 }).sort({ price: -1 }).lean();
+        const discountAmount = product ? Math.floor(product.price * disc.value / 100) : 0;
+        const keyboard = product ? buildProductMarkup(product, discountAmount) : null;
+        
+        const reminderMsg = `⏰ *DISKON ${disc.value}% HANGUS DALAM 6 JAM!*\n\n` +
+          `Bos, kupon diskon spesial Anda akan kedaluwarsa malam ini.\n\n` +
+          `➟ Klik tombol di bawah sebelum hangus!`;
+        
+        await sendSafe(bot, disc.target_user_id, reminderMsg, { media: hFile, mediaType: hType, keyboard });
+        await delay(1500);
       }
+      console.log('[CRON] ✅ Reminder diskon terkirim ke', expiringDiscounts.length, 'user.');
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal kirim reminder diskon:', err.message);
     }
-    if (jakartaHour === 2 && lastCronDate !== today + '_backup') {
-      lastCronDate = today + '_backup';
-      try {
-        const { runDatabaseBackup } = require('./backup');
-        await runDatabaseBackup(bot);
-      } catch (err) {
-        console.error('[CRON] Gagal menjalankan backup:', err);
-      }
-    }
+  }, { timezone: 'Asia/Jakarta' });
 
-    if (jakartaHour === 3 && lastCronDate !== today + '_cleanup') {
-      lastCronDate = today + '_cleanup';
-      await cleanupConvertedDripLogs();
+  // ── TASK 6: Auto-Close Order Macet — Setiap hari jam 04:00 WIB ──────────────
+  const stuckOrderTask = cron.schedule('0 4 * * *', async () => {
+    console.log('[CRON] ⏰ Membersihkan order macet...');
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const result = await Order.updateMany(
+        { status: 'PENDING', created_at: { $lte: sevenDaysAgo } },
+        { $set: { status: 'EXPIRED' } }
+      );
+      console.log('[CRON] ✅ Auto-close order macet:', result.modifiedCount, 'order ditutup.');
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal close order macet:', err.message);
     }
-    
-    if (jakartaHour === 23 && lastCronDate !== today + '_metrics') {
-      lastCronDate = today + '_metrics';
-      try {
-        const adminId = process.env.ADMIN_ID || process.env.ADMIN_CHAT_ID;
-        if (adminId) {
-          const metricsMsg = await getCampaignMetrics();
-          await bot.telegram.sendMessage(adminId, metricsMsg, { parse_mode: 'Markdown' });
-        }
-      } catch (err) {
-        console.error('[CRON] Gagal kirim metrics harian:', err);
-      }
-    }
-  };
+  }, { timezone: 'Asia/Jakarta' });
 
-  // Langsung jalankan sekali saat bot baru menyala agar tidak perlu menunggu 1 jam pertama
-  checkMarketing();
+  cronTasks = [marketingTask, backupTask, cleanupTask, metricsTask, discountReminderTask, stuckOrderTask];
   
-  // Set jadwal cek setiap 1 jam kemudian
-  cronTimer = setInterval(checkMarketing, 1000 * 60 * 60);
-  console.log('[CRON] Marketing Scheduler started. Berjalan tiap jam 10.00 WIB (dan langsung saat restart).');
+  // Langsung jalankan marketing sekali saat bot nyala (startup run)
+  // Gunakan daily key agar tidak bikin CronProgress duplikat
+  const jakartaNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+  const startupStr = `${jakartaNow.getFullYear()}-${String(jakartaNow.getMonth()+1).padStart(2,'0')}-${String(jakartaNow.getDate()).padStart(2,'0')}`;
+  console.log('[CRON] 🚀 Marketing Scheduler (node-cron) started. Dijadwalkan setiap jam, restart-proof!');
+  console.log('[CRON] Menjalankan startup run untuk tanggal:', startupStr);
+  runMarketingCampaign(bot, startupStr)
+    .then(stats => console.log('[CRON] ✅ Startup run selesai. Stats:', JSON.stringify(stats)))
+    .catch(err => console.error('[CRON] ❌ Startup run gagal:', err.message));
 }
+
 
 function setMarketingEnabled(val) { marketingEnabled = val; }
 function isMarketingEnabled() { return marketingEnabled; }
 function stopDailyCron() {
-  if (cronTimer) { clearInterval(cronTimer); cronTimer = null; }
+  cronTasks.forEach(t => t.destroy());
+  cronTasks = [];
+  console.log('[CRON] All scheduled tasks stopped.');
 }
 
 module.exports = {

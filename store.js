@@ -124,7 +124,9 @@ async function getOrder(orderId) {
 }
 
 async function applyAutomaticDiscount(userId, productId, basePrice) {
-  const user = await User.findById(userId).lean();
+  // FIX: Selalu konversi ke Number agar query MongoDB tidak gagal karena type mismatch (String vs Number)
+  const numUserId = Number(userId);
+  const user = await User.findById(numUserId).lean();
   if (!user) return null;
 
   const now = new Date();
@@ -132,8 +134,8 @@ async function applyAutomaticDiscount(userId, productId, basePrice) {
     active: true,
     $and: [
       { $or: [{ valid_until: null }, { valid_until: { $gt: now } }] },
-      { $or: [{ target_product_id: null }, { target_product_id: productId }] },
-      { $or: [{ target_user_id: null }, { target_user_id: userId }] }
+      { $or: [{ target_product_id: null }, { target_product_id: String(productId) }] },
+      { $or: [{ target_user_id: null }, { target_user_id: numUserId }] }
     ]
   }).lean();
 
@@ -149,16 +151,16 @@ async function applyAutomaticDiscount(userId, productId, basePrice) {
     if (discount.trigger_event === 'FIRST_TIME' && user.purchase_count === 0) isEligible = true;
     else if (discount.trigger_event === 'LOYALTY' && user.purchase_count >= 5) isEligible = true;
     else if (discount.trigger_event === 'CART_ABANDON') {
-      const lastCheckout = await UserEvent.findOne({ user_id: userId, event_type: 'CHECKOUT' }).sort('-created_at');
+      const lastCheckout = await UserEvent.findOne({ user_id: numUserId, event_type: 'CHECKOUT' }).sort('-created_at');
       if (lastCheckout && (now - lastCheckout.created_at) > 3600000) isEligible = true; // 1 jam
     } else if (!discount.trigger_event || discount.trigger_event === 'ALL') {
-      isEligible = true;
+      isEligible = true; // Diskon personal dari Drip Stage 3 tidak punya trigger, langsung berlaku
     }
 
     if (isEligible) {
       let deduction = 0;
       if (discount.type === 'PERCENTAGE') {
-        deduction = (basePrice * discount.value) / 100;
+        deduction = Math.floor((basePrice * discount.value) / 100);
       } else if (discount.type === 'FIXED') {
         deduction = discount.value;
       }

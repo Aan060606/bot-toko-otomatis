@@ -61,7 +61,7 @@ function showMarketingMenu(ctx) {
   const text = `📢 *Marketing & CRM*\n\nOtomatisasi pengiriman pesan dan pengelolaan pelanggan.`;
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback("📢 Broadcast Pesan", "admin_crm_menu"), Markup.button.callback("🎟️ Diskon Otomatis", "admin_discount")],
-    [Markup.button.callback("👥 Statistik Penjualan", "admin_crm_stats")],
+    [Markup.button.callback("👥 Statistik Penjualan", "admin_crm_stats"), Markup.button.callback("📈 ROI Marketing", "admin_marketing_roi")],
     [Markup.button.callback("🤖 Mesin Automasi", "admin_marketing_settings")],
     [Markup.button.callback("🔙 Menu Utama", "admin_main")]
   ]);
@@ -195,6 +195,66 @@ async function showAdminCrmStats(ctx) {
   return ctx.replyWithMarkdown(text, keyboard);
 }
 
+// Fitur Baru: Tampilan ROI Marketing Real-Time
+async function showAdminMarketingRoi(ctx) {
+  const { DripLog, ABTestResult } = require('./database');
+  
+  const dripStats = await DripLog.aggregate([
+    { $group: { 
+      _id: "$stage", 
+      total: { $sum: 1 }, 
+      converted: { $sum: { $cond: ["$converted", 1, 0] } },
+      revenue: { $sum: "$revenue_generated" }
+    }},
+    { $sort: { _id: 1 } }
+  ]);
+
+  const abStats = await ABTestResult.aggregate([
+    { $group: { 
+      _id: "$variant", 
+      conversions: { $sum: 1 },
+      revenue: { $sum: "$revenue_generated" }
+    }},
+    { $sort: { _id: 1 } }
+  ]);
+
+  const formatRp = (num) => 'Rp' + (num || 0).toLocaleString('id-ID');
+  let totalDripRevenue = 0;
+  
+  let text = `📈 *Dashboard ROI Marketing (Real-Time)*\n\n`;
+  text += `Laporan ini menunjukkan seberapa besar pendapatan yang dihasilkan langsung oleh mesin automasi Drip Campaign.\n\n`;
+  
+  text += `🎯 *Kinerja Follow-up (Berdasarkan Tahap):*\n`;
+  if (dripStats.length === 0) text += `- Belum ada data marketing\n`;
+  dripStats.forEach(s => {
+    totalDripRevenue += s.revenue || 0;
+    const rate = s.total > 0 ? Math.round((s.converted / s.total) * 100) : 0;
+    text += `*Stage ${s._id}:*\n`;
+    text += `  • Terkirim: ${s.total} user\n`;
+    text += `  • Konversi: ${s.converted} (${rate}%)\n`;
+    text += `  • Pendapatan: ${formatRp(s.revenue)}\n`;
+  });
+
+  text += `\n🧪 *Kinerja A/B Testing (Copywriting):*\n`;
+  if (abStats.length === 0) text += `- Belum ada data A/B Test\n`;
+  abStats.forEach(s => {
+    text += `*Varian ${s._id}:*\n`;
+    text += `  • Konversi: ${s.conversions}\n`;
+    text += `  • Pendapatan: ${formatRp(s.revenue)}\n`;
+  });
+
+  text += `\n━━━━━━━━━━━━━━━━━━\n`;
+  text += `💵 *TOTAL REVENUE DRIP:* ${formatRp(totalDripRevenue)}\n`;
+  text += `━━━━━━━━━━━━━━━━━━\n`;
+
+  const keyboard = Markup.inlineKeyboard([[Markup.button.callback("🔙 Kembali", "admin_marketing_menu")]]);
+  
+  if (ctx.callbackQuery) {
+    return ctx.editMessageText(text, { parse_mode: "Markdown", ...keyboard });
+  }
+  return ctx.replyWithMarkdown(text, keyboard);
+}
+
 
 module.exports = {
   isAdmin,
@@ -204,5 +264,6 @@ module.exports = {
   showMarketingMenu,
   showSystemMenu,
   showAdminProducts,
-  showAdminCrmStats
+  showAdminCrmStats,
+  showAdminMarketingRoi
 };

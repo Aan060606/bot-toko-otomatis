@@ -17,6 +17,7 @@ const { User, Product, Stock, Cart, Order, OrderItem, Setting, UserEvent, Discou
 const store = require("./store");
 const admin = require("./admin");
 const scheduler = require("./scheduler");
+const preview = require("./preview");
 
 const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
 const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim() || null;
@@ -233,6 +234,10 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
       logger.warn(`[IDEMPOTENT] Order ${orderId} sudah diproses. Skip.`);
       return;
     }
+
+    // CATAT ROI MARKETING!
+    // Hentikan drip campaign dan catat bahwa user ini menghasilkan pendapatan (ROI).
+    await scheduler.markDripConverted(chatId, updatedOrder.total_amount);
 
     const deliveries = await store.fulfillOrder(orderId);
     let deliveryText = `✅ *Pembayaran Berhasil!*\n\n🎉 Terima kasih atas pesanan Anda. Berikut adalah produk yang Anda beli:\n\n`;
@@ -691,6 +696,7 @@ bot.command("marketing_on", async (ctx) => {
   if (!admin.isAdmin(ctx)) return;
   scheduler.setMarketingEnabled(true);
   scheduler.startCron(bot);
+  preview.setupPreviewCommands(bot); // Setup /set_vip_group dan /set_topic_name
   replySafe(ctx, "✅ *Marketing otomatis AKTIF!*\n\nCampaign akan berjalan otomatis setiap hari jam 10.00 WIB.", { parse_mode: 'Markdown' });
 });
 
@@ -1067,9 +1073,15 @@ bot.action("admin_products", async (ctx) => {
 
 // Handler tombol CRM Statistik
 bot.action("admin_crm_stats", async (ctx) => {
-  if (!admin.isAdmin(ctx)) return;
+  if (!admin.isAdmin(ctx)) return ctx.answerCbQuery("Ditolak!");
   await ctx.answerCbQuery();
   return admin.showAdminCrmStats(ctx);
+});
+
+bot.action("admin_marketing_roi", async (ctx) => {
+  if (!admin.isAdmin(ctx)) return ctx.answerCbQuery("Ditolak!");
+  await ctx.answerCbQuery();
+  return admin.showAdminMarketingRoi(ctx);
 });
 
 // Handler tombol Broadcast CRM — UI interaktif
@@ -1213,6 +1225,9 @@ bot.action("admin_header", async (ctx) => {
 });
 
 bot.on('message', async (ctx, next) => {
+  // Preview Middleware: tangkap foto/video dari grup VIP untuk cache preview
+  await preview.previewMiddleware(ctx, async () => {});
+
   const session = ctx.session || {};
   if (!session.step) return next();
 
@@ -1668,13 +1683,48 @@ bot.command("testpay", async (ctx) => {
   return handleTestPay(ctx);
 });
 
+// ADMIN: Force trigger marketing (Untuk testing / mempercepat jadwal Drip)
+bot.command('force_marketing', async (ctx) => {
+  if (!admin.isAdmin(ctx)) return;
+  await ctx.reply("⏳ Memaksa mesin automasi marketing berjalan sekarang juga...");
+
+  try {
+    const stats = await scheduler.runMarketingCampaign(bot, 'forced_' + Date.now());
+
+    // stats.skipped === true hanya jika marketing dimatikan admin
+    if (stats.skipped === true) {
+      await ctx.reply(`⚠️ *Marketing Dimatikan.*\nAlasan: ${stats.reason}\n\nKetik /marketing\\_on untuk mengaktifkan.`, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    // Campaign berjalan — tampilkan hasil ringkas
+    const total = (stats.cold || 0) + (stats.abandon || 0) + (stats.inactive || 0) +
+                  (stats.crossSell || 0) + (stats.stage2 || 0) + (stats.stage3 || 0) + (stats.vipWinBack || 0);
+    let msg = `✅ *Marketing Selesai!*\n\n`;
+    msg += `📨 *Total Pesan Terkirim:* ${total}\n\n`;
+    if (stats.stage2)     msg += `• Stage 2 (Urgensi): ${stats.stage2} user\n`;
+    if (stats.stage3)     msg += `• Stage 3 (Diskon Final): ${stats.stage3} user\n`;
+    if (stats.cold)       msg += `• Cold Lead (Baru): ${stats.cold} user\n`;
+    if (stats.abandon)    msg += `• Cart Abandon: ${stats.abandon} user\n`;
+    if (stats.inactive)   msg += `• Inactive: ${stats.inactive} user\n`;
+    if (stats.crossSell)  msg += `• Cross-Sell: ${stats.crossSell} user\n`;
+    if (stats.vipWinBack) msg += `• VIP Win-Back: ${stats.vipWinBack} user\n`;
+    if (stats.skipped)    msg += `\n⏭ Diskip (cooldown): ${stats.skipped}\n`;
+    if (stats.failed)     msg += `❌ Gagal kirim: ${stats.failed}\n`;
+    if (total === 0)      msg += `\n_Semua user dalam cooldown atau tidak ada yang memenuhi syarat._`;
+
+    await ctx.reply(msg, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply(`❌ *Gagal:* ${err.message}`);
+  }
+});
+
 if (process.env.NODE_ENV !== "test") {
   // startSaweriaSSE(bot, onPaymentSuccess); // Dinonaktifkan karena sudah pindah ke Webhook
+  scheduler.startCron(bot);
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
       logger.success("Bot Toko Otomatis berjalan!");
-      // Mulai cron job marketing otomatis setiap hari jam 10.00 WIB
-      scheduler.startCron(bot);
     })
     .catch((err) => {
       if (err.message && err.message.includes('409')) {

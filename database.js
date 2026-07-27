@@ -106,6 +106,7 @@ const DripLogSchema = new mongoose.Schema({
   converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
   exited_reason: { type: String, enum: ['TIMEOUT', 'PURCHASE', 'BLOCKED'] },
   variant: { type: String, enum: ['A', 'B'] },   // Untuk A/B Testing
+  revenue_generated: { type: Number, default: 0 }, // Pendapatan yang dihasilkan dari konversi ini
   created_at: { type: Date, default: Date.now }
 });
 // TTL 180 hari absolut untuk menghapus data usang yang macet atau sudah converted
@@ -115,6 +116,7 @@ const ABTestResultSchema = new mongoose.Schema({
   variant: { type: String, enum: ['A', 'B'] },
   stage: Number,
   converted: { type: Boolean, default: false },
+  revenue_generated: { type: Number, default: 0 },
   created_at: { type: Date, default: Date.now }
 });
 
