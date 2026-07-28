@@ -368,11 +368,12 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
 
       if (["SUCCESS", "SETTLEMENT", "PAID", "CAPTURE"].includes(rawStatus)) {
         await onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId);
-      } else if (["FAILED", "EXPIRED", "CANCEL", "FAILURE", "DENY"].includes(rawStatus)) {
+      } else if (["FAILED", "EXPIRED", "EXPIRE", "CANCEL", "CANCELLED", "FAILURE", "DENY"].includes(rawStatus)) {
+        // [BUGFIX] Saweria mengembalikan 'expire' (bukan 'EXPIRED') — ditambahkan keduanya
         stopPolling(donationId);
-        try { await Order.findByIdAndUpdate(orderId, { status: 'FAILED' }); } catch (e) {}
+        try { await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED' }); } catch (e) {}
         if (qrMsgId) try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
-        try { await ctx.telegram.editMessageText(chatId, msgId, null, `❌ Pembayaran Gagal/Dibatalkan. Silakan checkout ulang.`, { parse_mode: "Markdown" }); } catch (_) {}
+        try { await ctx.telegram.editMessageText(chatId, msgId, null, `⏰ QR Code sudah kedaluwarsa / Pembayaran Dibatalkan. Silakan checkout ulang.`, { parse_mode: "Markdown" }); } catch (_) {}
       } else if (secondsLeft <= 0) {
         stopPolling(donationId);
         try { await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED' }); } catch (e) {}
@@ -1824,9 +1825,20 @@ if (process.env.NODE_ENV !== "test") {
                 const userId = parseInt(match[1]);
                 console.log(`[WEBHOOK] UID Terdeteksi: ${userId}`);
                 
-                const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+                // [BUGFIX] Cocokkan donation_id agar webhook lama tidak picu order baru yang salah
+                const donationIdFromWebhook = item.id || item.donation_id || null;
+                let order = null;
+                if (donationIdFromWebhook) {
+                  order = await Order.findOne({ user_id: userId, donation_id: donationIdFromWebhook, status: 'PENDING' });
+                }
+                // Fallback: jika donation_id tidak ada di payload, ambil order PENDING terbaru
+                if (!order) {
+                  order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+                }
+                
                 if (order) {
-                  if (amount < order.total_amount) {
+                  const TOLERANCE = 500; // Toleransi Rp500 untuk perbedaan pembulatan fee QRIS
+                  if (amount < (order.total_amount - TOLERANCE)) {
                     const textKurang = `⚠️ *PEMBAYARAN TIDAK SESUAI*\n\nSistem mendeteksi dana masuk sebesar *Rp${amount}*, namun total tagihan pesanan Anda adalah *Rp${order.total_amount}*.\n\nPesanan DIBATALKAN. Silakan hubungi admin.`;
                     bot.telegram.sendMessage(userId, textKurang, { parse_mode: "Markdown" }).catch(() => {});
                     await Order.findByIdAndUpdate(order._id, { status: 'FAILED' });
