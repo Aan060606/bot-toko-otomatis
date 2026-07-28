@@ -4,7 +4,21 @@ const uri = process.env.MONGODB_URI || "mongodb://localhost:27017/toko-otomatis"
 
 mongoose.connect(uri)
   .then(() => console.log("✅ Terhubung ke MongoDB!"))
-  .catch(err => console.error("❌ Gagal terhubung ke MongoDB:", err));
+  .catch(err => {
+    console.error("❌ Gagal terhubung ke MongoDB saat startup:", err);
+    process.exit(1);
+  });
+
+// [BUGFIX 4] Silent DB Disconnect: Paksa restart jika koneksi putus di tengah jalan
+mongoose.connection.on('error', (err) => {
+  console.error("❌ Mongoose Error (Runtime):", err);
+  process.exit(1); // Force Coolify to restart container
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.error("⚠️ Koneksi MongoDB terputus! Merestart container untuk pemulihan...");
+  process.exit(1);
+});
 
 const UserSchema = new mongoose.Schema({
   _id: Number, // Telegram User ID

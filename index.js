@@ -74,7 +74,12 @@ async function getBgPage() {
     });
     
     browserInstance.on('disconnected', () => {
-      logger.warn("Browser terputus/crash! Mengatur ulang instance...");
+      logger.warn("Browser terputus/crash! Memastikan zombie process terhapus...");
+      try {
+        if (browserInstance && browserInstance.process()) {
+          browserInstance.process().kill('SIGKILL');
+        }
+      } catch (e) { }
       browserInstance = null;
       bgPage = null;
     });
@@ -397,6 +402,16 @@ async function trackEvent(userId, eventType, productId = null, metadata = {}) {
 
 // Cache in-memory agar tidak spam write ke MongoDB tiap kali user klik tombol
 const activeUsersCache = new Map();
+
+// [BUGFIX 1] Memory Leak Prevention: Bersihkan cache yang kadaluarsa tiap 6 jam
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, lastUpdate] of activeUsersCache.entries()) {
+    if (now - lastUpdate > 24 * 60 * 60 * 1000) {
+      activeUsersCache.delete(userId);
+    }
+  }
+}, 6 * 60 * 60 * 1000);
 
 bot.use(async (ctx, next) => {
   if (ctx.from) {
@@ -1594,6 +1609,17 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
   const userId = ctx.from.id;
   
+  // [BUGFIX 3] Anti-DoS & Spam Checkout Limiter
+  const pendingOrder = await Order.findOne({ 
+    user_id: userId, 
+    status: 'PENDING', 
+    created_at: { $gte: new Date(Date.now() - 20 * 60 * 1000) } 
+  });
+  
+  if (pendingOrder) {
+    return ctx.reply("⚠️ *Tunggu Dulu!* Anda masih memiliki pesanan QRIS yang sedang aktif (belum dibayar).\n\nSilakan selesaikan pembayaran sebelumnya, atau tunggu sekitar 15 menit hingga QR Code tersebut kedaluwarsa sebelum memesan lagi.", { parse_mode: 'Markdown' });
+  }
+
   await trackEvent(userId, 'CHECKOUT', productId);
   
   await store.clearCart(userId);
