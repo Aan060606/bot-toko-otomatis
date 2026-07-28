@@ -1538,7 +1538,8 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
   try {
-    const buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
+    let buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
+    if (buyerName.length > 30) buyerName = buyerName.substring(0, 30);
     
     // Cek diskon otomatis
     let discountInfo = "";
