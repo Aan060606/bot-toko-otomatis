@@ -100,6 +100,9 @@ async function getBgPage() {
   return bgPage;
 }
 
+let isResolvingCloudflare = false;
+let cfResolvePromise = null;
+
 async function executeFetch(page, method, url, body) {
   const reqFn = async (fetchUrl, fetchMethod, fetchBody) => {
     const options = {
@@ -118,9 +121,18 @@ async function executeFetch(page, method, url, body) {
   
   // Jika kena block Cloudflare lagi (HTML Just a moment)
   if (res.body.includes('<!DOCTYPE html>') && res.body.includes('Just a moment')) {
-     logger.warn("Terkena challenge Cloudflare. Mengambil clearance ulang...");
-     await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
-     try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
+     if (isResolvingCloudflare) {
+       await cfResolvePromise;
+     } else {
+       isResolvingCloudflare = true;
+       cfResolvePromise = (async () => {
+         logger.warn("Terkena challenge Cloudflare. Mengambil clearance ulang...");
+         await page.goto('https://backend.saweria.co/', { waitUntil: 'networkidle2' });
+         try { await page.waitForFunction(() => document.title !== 'Just a moment...', { timeout: 15000 }); } catch(e) { }
+       })();
+       await cfResolvePromise;
+       isResolvingCloudflare = false;
+     }
      res = await page.evaluate(reqFn, url, method, body);
   }
   
@@ -1720,24 +1732,36 @@ bot.command('force_marketing', async (ctx) => {
   }
 });
 
+async function resumePendingOrders() {
+  try {
+    const twentyMinsAgo = new Date(Date.now() - 20 * 60 * 1000);
+    const pendingOrders = await Order.find({ status: 'PENDING', created_at: { $gte: twentyMinsAgo } }).lean();
+    
+    if (pendingOrders.length > 0) {
+      logger.info(`[AUTO-RESUME] Menemukan ${pendingOrders.length} order PENDING. Melanjutkan polling...`);
+      for (const order of pendingOrders) {
+        if (!order.donation_id) continue;
+        const mockCtx = { telegram: bot.telegram };
+        pollPaymentStatus(mockCtx, order.donation_id, order.user_id, order.status_msg_id, order._id, order.qr_msg_id);
+      }
+    }
+  } catch (err) {
+    logger.error("[AUTO-RESUME] Gagal memuat order PENDING:", err.message);
+  }
+}
+
 if (process.env.NODE_ENV !== "test") {
   // startSaweriaSSE(bot, onPaymentSuccess); // Dinonaktifkan karena sudah pindah ke Webhook
   scheduler.startCron(bot);
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
       logger.success("Bot Toko Otomatis berjalan!");
+      resumePendingOrders();
     })
     .catch((err) => {
       if (err.message && err.message.includes('409')) {
-        logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Pastikan tidak ada instance lain yang aktif.");
-        // Retry after 15 seconds instead of crashing
-        setTimeout(() => {
-          logger.info("Mencoba restart bot...");
-          bot.launch({ dropPendingUpdates: true }).then(() => logger.success("Bot berhasil restart!")).catch(e => {
-            logger.error("Gagal restart:", e.message);
-            // Jangan process.exit(1) agar Webhook tetap hidup!
-          });
-        }, 15000);
+        logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Mematikan diri agar Coolify merestart (Graceful Shutdown)!");
+        process.exit(1);
       } else {
         logger.error("Gagal menjalankan bot:", err.message);
         process.exit(1);
