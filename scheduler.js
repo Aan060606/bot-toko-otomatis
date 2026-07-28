@@ -243,8 +243,15 @@ async function runNonBuyerCampaign(bot) {
     if (defaultProduct) {
       const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(defaultProduct._id), converted: false }).lean();
       if (existingDrip) {
-        stats.skipped++;
-        continue; // Jangan spam Campaign 1 jika user masih dalam Funnel (Stage 1, 2, 3)
+        // [BUGFIX] Stage 5 Recycling: Jika user di-reset ke stage:0, langsung upgrade ke stage:1
+        // agar masuk pipeline lagi. Tanpa ini, user stuck selamanya di stage:0.
+        if (existingDrip.stage === 0) {
+          await DripLog.findByIdAndUpdate(existingDrip._id, { stage: 1, sent_at: new Date() });
+          // Lanjutkan — biarkan user ini diproses dalam iterasi ini
+        } else {
+          stats.skipped++;
+          continue; // Jangan spam Campaign 1 jika user masih dalam Funnel (Stage 1, 2, 3)
+        }
       }
     }
 
@@ -695,7 +702,8 @@ async function runDripFollowUp(bot) {
       await DripLog.findByIdAndUpdate(log._id, { 
         stage: 0, 
         sent_at: new Date(),
-        variant: Math.random() > 0.5 ? 'A' : 'B' // Ganti varian (A/B testing)
+        variant: Math.random() > 0.5 ? 'A' : 'B', // Ganti varian (A/B testing)
+        exited_reason: null // Reset agar tidak dianggap TIMEOUT/BLOCKED
       });
       console.log(`[DRIP] ♻️ Mereset user ${log.user_id} dari Stage 4 kembali ke awal pipeline!`);
       stats.recycled = (stats.recycled || 0) + 1;

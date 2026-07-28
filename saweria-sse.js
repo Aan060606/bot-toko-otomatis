@@ -75,21 +75,39 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
               const userId = parseInt(match[1]);
               console.log(`[WS] Mendeteksi pembayaran untuk UID Telegram: ${userId}`);
               
-              // Cari order yang masih PENDING untuk user ini
-              const order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+              // [BUGFIX KRITIS] SSE: item.amount = jumlah yang user bayar (NET, tanpa fee QRIS)
+              // order.total_amount = harga * 1.04 (sudah include markup fee QRIS 4%)
+              // Jadi item.amount SELALU < order.total_amount -- tidak bisa dibandingkan langsung!
+              // Solusi: cari order berdasarkan donation_id, atau gunakan toleransi yang lebih besar
+              
+              // Prioritaskan match berdasarkan donation_id
+              let order = await Order.findOne({ 
+                user_id: userId, 
+                status: 'PENDING',
+                donation_id: item.id // Saweria WS item.id = donation_id
+              });
+              
+              // Fallback: ambil order PENDING terbaru jika donation_id tidak cocok
+              if (!order) {
+                order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
+              }
               
               if (order) {
-                // Validasi keamanan: Pastikan jumlah yang dibayar SESUAI dengan tagihan
-                if (item.amount < order.total_amount) {
-                  console.log(`[WS] PERINGATAN KEAMANAN: UID ${userId} mencoba membayar Rp${item.amount} untuk tagihan Rp${order.total_amount}. Ditolak!`);
+                // Toleransi: item.amount adalah harga bersih (net), order.total_amount sudah termasuk fee 4%
+                // Toleransi = max(2000, 5% dari order.total_amount) agar aman di semua harga produk
+                const TOLERANCE = Math.max(2000, Math.ceil(order.total_amount * 0.05));
+                const amountWithFee = Math.ceil(item.amount * 1.04 / 500) * 500; // Konversi ke 'format order'
+                const isUnderpayment = amountWithFee < (order.total_amount - TOLERANCE);
+                
+                if (isUnderpayment) {
+                  console.log(`[WS] PERINGATAN: UID ${userId} bayar Rp${item.amount} (net) / Rp${amountWithFee} (est. total) untuk tagihan Rp${order.total_amount}. Selisih terlalu besar!`);
                   
                   const textKurang = `⚠️ *PEMBAYARAN TIDAK SESUAI*\n\nSistem mendeteksi dana masuk sebesar *Rp${item.amount}*, namun total tagihan pesanan Anda adalah *Rp${order.total_amount}*.\n\nPesanan otomatis DIBATALKAN karena nominal tidak sesuai. Silakan hubungi admin jika terjadi kesalahan.`;
                   bot.telegram.sendMessage(userId, textKurang, { parse_mode: "Markdown" }).catch(() => {});
                   
-                  // Opsional: Langsung ubah status order ke FAILED
                   await Order.findByIdAndUpdate(order._id, { status: 'FAILED' });
                 } else {
-                  console.log(`[WS] Ditemukan Order PENDING: ${order._id}. Memproses pesanan secara kilat!`);
+                  console.log(`[WS] ✅ Pembayaran valid! UID ${userId} bayar Rp${item.amount}. Order ${order._id} diproses via WebSocket!`);
                   
                   // Buat mock ctx karena onPaymentSuccess butuh ctx.telegram
                   const mockCtx = { telegram: bot.telegram };
