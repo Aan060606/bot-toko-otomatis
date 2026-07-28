@@ -1610,18 +1610,25 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
   const productId = ctx.match[1];
   const userId = ctx.from.id;
   
-  // [BUGFIX 3] Anti-DoS & Spam Checkout Limiter (Diperbarui)
-  // Sebelumnya 20 menit, ini membuat user tidak bisa ganti produk.
-  // Kita kurangi menjadi 1 menit (hanya untuk mencegah spam API Saweria).
-  // createOrder di store.js akan otomatis membatalkan pesanan PENDING sebelumnya.
-  const spamCheckout = await Order.findOne({ 
+  // [BUGFIX 3] Anti-DoS & Spam Checkout Limiter (Per Produk)
+  // Membatasi checkout per produk selama 15 menit agar user tetap bisa pesan produk lain
+  const pendingOrders = await Order.find({ 
     user_id: userId, 
     status: 'PENDING', 
-    created_at: { $gte: new Date(Date.now() - 60 * 1000) } // 1 menit
-  });
+    created_at: { $gte: new Date(Date.now() - 15 * 60 * 1000) } 
+  }).lean();
+
+  let hasPendingSameProduct = false;
+  for (const order of pendingOrders) {
+    const itemExists = await OrderItem.findOne({ order_id: order._id, product_id: productId }).lean();
+    if (itemExists) {
+      hasPendingSameProduct = true;
+      break;
+    }
+  }
   
-  if (spamCheckout) {
-    return ctx.reply("⚠️ *Jangan Terlalu Cepat!*\n\nMohon tunggu sekitar 1 menit sebelum membuat pesanan baru (Anti-Spam).", { parse_mode: 'Markdown' });
+  if (hasPendingSameProduct) {
+    return ctx.reply("⚠️ *Tunggu Dulu!* Anda masih memiliki pesanan QRIS yang sedang aktif (belum dibayar) untuk produk ini.\n\nSilakan selesaikan pembayaran sebelumnya, atau tunggu sekitar 15 menit hingga QR Code tersebut kedaluwarsa sebelum memesan produk yang sama lagi.", { parse_mode: 'Markdown' });
   }
 
   await trackEvent(userId, 'CHECKOUT', productId);

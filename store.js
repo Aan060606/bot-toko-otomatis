@@ -48,11 +48,16 @@ async function removeCartItem(cartId) {
 }
 
 async function createOrder(donationId, userId, totalAmount, cartItems, discountId = null) {
-  // Batalkan semua order PENDING sebelumnya untuk user ini agar tidak ganda
-  await Order.updateMany(
-    { user_id: userId, status: 'PENDING' },
-    { $set: { status: 'CANCELLED' } }
-  );
+  // Hanya batalkan order PENDING sebelumnya yang berisi produk yang sama
+  // agar user tetap bisa memesan produk lain secara paralel
+  const pendingOrders = await Order.find({ user_id: userId, status: 'PENDING' }).lean();
+  for (const order of pendingOrders) {
+    const items = await OrderItem.find({ order_id: order._id }).lean();
+    const hasSameProduct = items.some(i => cartItems.some(ci => String(ci.product_id) === String(i.product_id)));
+    if (hasSameProduct) {
+      await Order.updateOne({ _id: order._id }, { $set: { status: 'CANCELLED' } });
+    }
+  }
 
   const crypto = require('crypto');
   const orderId = 'ORD-' + Date.now() + '-' + crypto.randomUUID().slice(0, 8);
