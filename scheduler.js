@@ -970,10 +970,24 @@ function startCron(bot) {
     }
   }, { timezone: 'Asia/Jakarta' });
 
-  // ── TASK 3: Cleanup DripLogs Expired — Setiap hari jam 03:00 WIB ───────────
+  // ── TASK 3: Cleanup DripLogs & Expired Discounts — Setiap hari jam 03:00 WIB ───────────
   const cleanupTask = cron.schedule('0 3 * * *', async () => {
-    console.log('[CRON] ⏰ Menjalankan cleanup DripLogs...');
+    console.log('[CRON] ⏰ Menjalankan cleanup DripLogs dan Diskon...');
     await cleanupConvertedDripLogs();
+    
+    // Deactivate expired discounts to prevent DB bloat
+    try {
+      const result = await Discount.updateMany(
+        { active: true, valid_until: { $lt: new Date() } },
+        { $set: { active: false } }
+      );
+      if (result.modifiedCount > 0) {
+        console.log(`[CLEANUP] Dinonaktifkan ${result.modifiedCount} diskon kedaluwarsa.`);
+      }
+    } catch (err) {
+      console.error('[CLEANUP] Gagal menonaktifkan diskon kedaluwarsa:', err.message);
+    }
+    
     console.log('[CRON] ✅ Cleanup selesai.');
   }, { timezone: 'Asia/Jakarta' });
 
