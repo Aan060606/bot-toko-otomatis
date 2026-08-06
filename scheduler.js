@@ -68,6 +68,44 @@ function buildProductMarkup(product, discountAmount = 0) {
   return Markup.inlineKeyboard(buttons);
 }
 
+// Bangun keyboard dengan SEMUA produk yang belum dibeli user (untuk campaign & reminder)
+async function buildAllProductsKeyboard(userId, allProducts, discountPercentage = 0) {
+  // Ambil produk yang sudah dibeli user
+  const successOrders = await Order.find({ user_id: userId, status: 'SUCCESS' }).lean();
+  const orderIds = successOrders.map(o => o._id);
+  const boughtItems = orderIds.length > 0
+    ? await OrderItem.find({ order_id: { $in: orderIds } }).lean()
+    : [];
+  const boughtProductIds = new Set(boughtItems.map(i => String(i.product_id)));
+
+  // Filter ke produk yang BELUM dibeli
+  const unboughtProducts = allProducts.filter(p => !boughtProductIds.has(String(p._id)));
+  if (unboughtProducts.length === 0) return { keyboard: null, products: [] };
+
+  const buttons = [];
+  for (const p of unboughtProducts) {
+    if (p.preview_url) {
+      buttons.push([Markup.button.url(`📺 Preview ${p.name}`, p.preview_url)]);
+    }
+    if (discountPercentage > 0 && p.price > 0) {
+      const discountAmount = Math.floor(p.price * discountPercentage / 100);
+      const finalPrice = Math.max(0, p.price - discountAmount);
+      const originalK = formatK(p.price);
+      const numPart = originalK.replace('k', '');
+      const kPart = originalK.includes('k') ? 'k' : '';
+      buttons.push([Markup.button.callback(
+        `💥 ${p.name}: ${strikeThrough(numPart)}${kPart} ➤ Rp${formatK(finalPrice)}`,
+        `buy_now_${p._id}`
+      )]);
+    } else {
+      buttons.push([Markup.button.callback(
+        `🔥 Beli ${p.name} (Rp${formatK(p.price)})`,
+        `buy_now_${p._id}`
+      )]);
+    }
+  }
+  return { keyboard: Markup.inlineKeyboard(buttons), products: unboughtProducts };
+}
 async function calculateDynamicDiscount(user) {
   const daysSinceJoin = (Date.now() - new Date(user.joined_at)) / (1000 * 60 * 60 * 24);
   const purchaseCount = user.purchase_count || 0;
@@ -234,8 +272,6 @@ async function runNonBuyerCampaign(bot) {
 
   const hType = await getSetting("header_type", "url");
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
-  let keyboard = null;
-  if (defaultProduct) keyboard = buildProductMarkup(defaultProduct);
 
   for (const user of nonBuyers) {
     if (isInCooldown(user)) { stats.skipped++; continue; }
@@ -259,10 +295,16 @@ async function runNonBuyerCampaign(bot) {
     let msg = segment === 'CART_ABANDON' ? msgCartAbandon
                : segment === 'INACTIVE'     ? msgInactive
                : msgColdLead;
-               
-    if (defaultProduct) {
-      msg = msg.replace(/\{produk\}/g, defaultProduct.name);
-    }
+
+    // [FIX] Bangun keyboard dengan SEMUA produk yang belum dibeli user
+    const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, 0);
+    const keyboard = allKeyboard;
+
+    // Ganti placeholder {produk} dengan nama semua produk yang belum dibeli
+    const produkNames = unboughtProducts.length > 0
+      ? unboughtProducts.map(p => `<b>${p.name}</b>`).join(' &amp; ')
+      : (defaultProduct ? defaultProduct.name : 'produk kami');
+    msg = msg.replace(/\{produk\}/g, produkNames);
 
     // 🔥 KIRIM PREVIEW DULU sebelum teks promo (bila ada cache preview dari grup VIP)
     // Ini membuat user melihat konten nyata sebelum pitch = konversi jauh lebih tinggi
@@ -1020,41 +1062,37 @@ function startCron(bot) {
       const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
       
       for (const disc of expiringDiscounts) {
+        if (!disc.target_user_id) continue; // Diskon global, skip
         const user = await User.findById(disc.target_user_id).lean();
         if (!user || user.is_blocked) continue;
-        
-        // [BUGFIX] Cari produk yang SESUAI dengan diskon ini (bukan sekadar produk termahal)
-        let product = null;
-        if (disc.target_product_id) {
-          product = await Product.findById(disc.target_product_id).lean();
-        }
-        if (!product) {
-          // Fallback ke produk terlaris jika tidak ada target spesifik
-          const popularAgg = await require('./database').OrderItem?.aggregate([
-            { $group: { _id: '$product_id', count: { $sum: 1 } } },
-            { $sort: { count: -1 } }, { $limit: 1 }
-          ]).catch(() => []);
-          if (popularAgg && popularAgg.length > 0) {
-            product = await Product.findById(popularAgg[0]._id).lean();
-          }
-          if (!product) product = await Product.findOne({ active: 1 }).lean();
-        }
-        if (!product) continue;
 
-        const discountAmount = Math.floor(product.price * disc.value / 100);
-        const finalPrice = product.price - discountAmount;
-        const expiryTime = disc.valid_until ? new Date(disc.valid_until).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' }) : '?';
-        const keyboard = buildProductMarkup(product, discountAmount);
-        
-        const reminderMsg = `⏰ *DISKON ${disc.value}% HANGUS HARI INI JAM ${expiryTime} WIB!*\n\n` +
-          `Bos, kupon diskon spesial Anda untuk *${product.name}* akan segera kedaluwarsa.\n\n` +
-          `Harga normal: ~~Rp${product.price.toLocaleString('id-ID')}~~\n` +
-          `Harga dengan diskon: *Rp${finalPrice.toLocaleString('id-ID')}*\n\n` +
-          `➟ Klik tombol di bawah *sebelum hangus jam ${expiryTime}!*`;
-        
+        // [FIX] Tampilkan SEMUA produk yang belum dibeli user, bukan hanya 1 produk
+        const allProductsForReminder = await Product.find({ active: 1 }).lean();
+        const { keyboard, products: unboughtProducts } = await buildAllProductsKeyboard(
+          disc.target_user_id, allProductsForReminder, disc.value
+        );
+        if (!keyboard || unboughtProducts.length === 0) continue;
+
+        const expiryTime = disc.valid_until
+          ? new Date(disc.valid_until).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' })
+          : '?';
+
+        // Buat ringkasan harga semua produk yang bisa dibeli dengan diskon ini
+        const productLines = unboughtProducts.map(p => {
+          const discAmt = Math.floor(p.price * disc.value / 100);
+          const finalP = p.price - discAmt;
+          return `• ${p.name}: Rp${p.price.toLocaleString('id-ID')} ➤ <b>Rp${finalP.toLocaleString('id-ID')}</b>`;
+        }).join('\n');
+
+        const reminderMsg = `⏰ <b>DISKON ${disc.value}% HANGUS JAM ${expiryTime} WIB!</b>\n\n` +
+          `Bos, kupon diskon spesial Anda akan segera kedaluwarsa.\n\n` +
+          `<b>Produk yang bisa kamu ambil sekarang:</b>\n${productLines}\n\n` +
+          `➟ Klik tombol di bawah <b>sebelum hangus!</b>`;
+
         await sendSafe(bot, disc.target_user_id, reminderMsg, { media: hFile, mediaType: hType, keyboard });
         await delay(1500);
       }
+
       console.log('[CRON] ✅ Reminder diskon terkirim ke', expiringDiscounts.length, 'user.');
     } catch (err) {
       console.error('[CRON] ❌ Gagal kirim reminder diskon:', err.message);
