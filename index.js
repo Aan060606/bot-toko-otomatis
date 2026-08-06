@@ -1653,6 +1653,22 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
     if (discount) {
       amount = Math.max(0, amount - discount.deduction);
       discountInfo = `\n🎁 *Diskon Otomatis:* -${formatRupiah(discount.deduction)}`;
+      // Increment used_count agar diskon tidak dipakai berkali-kali tanpa batas
+      try {
+        await Discount.findByIdAndUpdate(discount._id, { $inc: { used_count: 1 } });
+      } catch(e) { /* silent */ }
+    } else {
+      // [BUGFIX] Cek apakah user punya diskon yang BARU saja expired (dalam 24 jam terakhir)
+      // Jika ya, beri tahu user dengan jelas agar tidak bingung kenapa harga berubah
+      const recentlyExpired = await Discount.findOne({
+        target_user_id: Number(userId),
+        active: false,
+        valid_until: { $lt: new Date(), $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+      }).lean();
+
+      if (recentlyExpired) {
+        discountInfo = `\n\n⚠️ *Catatan:* Kupon diskon ${recentlyExpired.value}% Anda sudah kedaluwarsa. Anda ditagih harga normal.`;
+      }
     }
     
     // Hitung harga dasar (Base Amount) agar penjual menerima harga bersih 100%

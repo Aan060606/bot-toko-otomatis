@@ -1023,13 +1023,34 @@ function startCron(bot) {
         const user = await User.findById(disc.target_user_id).lean();
         if (!user || user.is_blocked) continue;
         
-        const product = await Product.findOne({ active: 1 }).sort({ price: -1 }).lean();
-        const discountAmount = product ? Math.floor(product.price * disc.value / 100) : 0;
-        const keyboard = product ? buildProductMarkup(product, discountAmount) : null;
+        // [BUGFIX] Cari produk yang SESUAI dengan diskon ini (bukan sekadar produk termahal)
+        let product = null;
+        if (disc.target_product_id) {
+          product = await Product.findById(disc.target_product_id).lean();
+        }
+        if (!product) {
+          // Fallback ke produk terlaris jika tidak ada target spesifik
+          const popularAgg = await require('./database').OrderItem?.aggregate([
+            { $group: { _id: '$product_id', count: { $sum: 1 } } },
+            { $sort: { count: -1 } }, { $limit: 1 }
+          ]).catch(() => []);
+          if (popularAgg && popularAgg.length > 0) {
+            product = await Product.findById(popularAgg[0]._id).lean();
+          }
+          if (!product) product = await Product.findOne({ active: 1 }).lean();
+        }
+        if (!product) continue;
+
+        const discountAmount = Math.floor(product.price * disc.value / 100);
+        const finalPrice = product.price - discountAmount;
+        const expiryTime = disc.valid_until ? new Date(disc.valid_until).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' }) : '?';
+        const keyboard = buildProductMarkup(product, discountAmount);
         
-        const reminderMsg = `⏰ *DISKON ${disc.value}% HANGUS DALAM 6 JAM!*\n\n` +
-          `Bos, kupon diskon spesial Anda akan kedaluwarsa malam ini.\n\n` +
-          `➟ Klik tombol di bawah sebelum hangus!`;
+        const reminderMsg = `⏰ *DISKON ${disc.value}% HANGUS HARI INI JAM ${expiryTime} WIB!*\n\n` +
+          `Bos, kupon diskon spesial Anda untuk *${product.name}* akan segera kedaluwarsa.\n\n` +
+          `Harga normal: ~~Rp${product.price.toLocaleString('id-ID')}~~\n` +
+          `Harga dengan diskon: *Rp${finalPrice.toLocaleString('id-ID')}*\n\n` +
+          `➟ Klik tombol di bawah *sebelum hangus jam ${expiryTime}!*`;
         
         await sendSafe(bot, disc.target_user_id, reminderMsg, { media: hFile, mediaType: hType, keyboard });
         await delay(1500);
