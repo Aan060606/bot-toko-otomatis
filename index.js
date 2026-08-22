@@ -2163,9 +2163,15 @@ async function showStoreMenu(ctx) {
     }
   } catch(e) { /* skip bundle jika error */ }
 
-  // Tombol chat admin — ambil username admin dari env atau fallback
-  const adminTg = process.env.ADMIN_TELEGRAM_USERNAME || process.env.SAWERIA_USERNAME || 'zahwafe';
+  // Tombol chat admin — baca dari .env file langsung agar tidak teroverride Coolify
+  let adminTg = 'Jokanwar'; // default
+  try {
+    const envContent = require('fs').readFileSync('/app/.env', 'utf8');
+    const match = envContent.match(/^ADMIN_TELEGRAM_USERNAME=(.+)$/m);
+    if (match) adminTg = match[1].trim();
+  } catch (_) {}
   buttons.push([Markup.button.url('💬 Tanya Admin', `https://t.me/${adminTg}`)]);
+
 
   const keyboard = Markup.inlineKeyboard(buttons);
   const hType = await store.getSetting('header_type', 'url');
@@ -2218,7 +2224,41 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
       return ctx.reply("⚠️ *Tunggu Dulu!* Anda masih memiliki pesanan QRIS yang sedang aktif (belum dibayar) untuk produk ini.\n\nSilakan selesaikan pembayaran sebelumnya, atau tunggu sekitar 15 menit hingga QR Code tersebut kedaluwarsa sebelum memesan produk yang sama lagi.", { parse_mode: 'Markdown' });
     }
 
+    // [FIX DOUBLE PAYMENT] Cek apakah user SUDAH punya produk ini (sudah bayar sebelumnya)
+    // Jika ya: kirim ulang link mereka, jangan buat order baru → cegah double payment
+    const prevSuccessOrder = await Order.findOne({ user_id: userId, status: 'SUCCESS' }).lean();
+    let alreadyOwned = null;
+    if (prevSuccessOrder) {
+      const prevItem = await OrderItem.findOne({ order_id: prevSuccessOrder._id, product_id: productId }).lean();
+      if (prevItem) {
+        alreadyOwned = await Stock.findOne({ order_id: String(prevSuccessOrder._id), status: 'SOLD' }).lean();
+      }
+    }
+    // Juga cek semua SUCCESS orders (kalau punya lebih dari 1)
+    if (!alreadyOwned) {
+      const allSuccess = await Order.find({ user_id: userId, status: 'SUCCESS' }).lean();
+      for (const so of allSuccess) {
+        const item = await OrderItem.findOne({ order_id: so._id, product_id: productId }).lean();
+        if (item) {
+          alreadyOwned = await Stock.findOne({ order_id: String(so._id), status: 'SOLD' }).lean();
+          if (alreadyOwned) break;
+        }
+      }
+    }
+    if (alreadyOwned) {
+      const isLink = alreadyOwned.content?.trim().startsWith('http');
+      const replyMsg = isLink
+        ? `✅ *Kamu sudah punya akses produk ini!*\n\n🔑 *Link Aksesmu:*\n👉 ${alreadyOwned.content.trim()}\n\n_Simpan link ini. Akses permanen — sekali bayar selamanya._`
+        : `✅ *Kamu sudah punya akses produk ini!*\n\n🔑 *Akses kamu:*\n\`${alreadyOwned.content}\`\n\n_Simpan ini baik-baik ya._`;
+      logger.info(`[CHECKOUT] User ${userId} coba beli ulang produk yang sudah dimiliki: ${productId} — kirim ulang link`);
+      return ctx.reply(replyMsg, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([[Markup.button.callback('🏠 Menu Utama', 'menu_main_keep')]])
+      });
+    }
+
     await trackEvent(userId, 'CHECKOUT', productId);
+
     
     await store.clearCart(userId);
     await store.addToCart(userId, productId);
