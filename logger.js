@@ -8,6 +8,10 @@ const path = require('path');
 const LOG_DIR = path.join(__dirname, 'logs');
 if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
+// Anti-spam: simpan hash alert terakhir agar tidak kirim yang sama dalam 1 jam
+let _lastAlertHash = null;
+let _lastAlertTime = 0;
+
 function jakartaTime() { return new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }); }
 function todayFilename() {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
@@ -135,7 +139,8 @@ const logger={
         }
         const leaked=await Discount.countDocuments({active:true,valid_until:{$lt:new Date()}});
         if(leaked>0){await Discount.updateMany({active:true,valid_until:{$lt:new Date()}},{$set:{active:false}});log('INFO','SYSTEM',`Health: Auto-fixed ${leaked} diskon expired`);}
-        const dups=await DripLog.aggregate([{$group:{_id:{u:'$user_id',c:'$campaign_type',s:'$stage'},n:{$sum:1}}},{$match:{n:{$gt:1}}}]);
+        // [FIX] Query duplikat pakai 4-field key sesuai unique index yang ada di DB
+        const dups=await DripLog.aggregate([{$group:{_id:{u:'$user_id',p:'$product_id',c:'$campaign_type',s:'$stage'},n:{$sum:1}}},{$match:{n:{$gt:1}}}]);
         if(dups.length>5)issues.push(`🟡 ${dups.length} grup DripLog duplikat`);
         const todayStart=new Date();todayStart.setHours(0,0,0,0);
         const rev=await Order.aggregate([{$match:{status:'SUCCESS',success_processed_at:{$gte:todayStart}}},{$group:{_id:null,r:{$sum:'$total_amount'},c:{$sum:1}}}]);
@@ -144,7 +149,21 @@ const logger={
         _counts.payment_success=Math.max(_counts.payment_success,todayCount);
         log('INFO','SYSTEM','Health check selesai',{stuck_pending:stuck,leaked_discounts:leaked,dup_drips:dups.length,revenue_today:todayRev,orders_today:todayCount,issues:issues.length});
         if(issues.length>0){
-          await alertAdmin(`🏥 <b>Health Check — ${issues.length} Masalah</b>\n\n`+issues.map(i=>`• ${i}`).join('\n')+`\n\nRevenue hari ini: <b>Rp${todayRev.toLocaleString('id-ID')}</b> (${todayCount} order)`);
+          // [FIX SPAM] Hanya kirim alert jika isu berbeda dari yang terakhir ATAU sudah >1 jam
+          const alertHash=issues.join('|');
+          const now=Date.now();
+          const isNewIssue=alertHash!==_lastAlertHash;
+          const isCooldownExpired=(now-_lastAlertTime)>60*60*1000; // 1 jam
+          if(isNewIssue||isCooldownExpired){
+            _lastAlertHash=alertHash;
+            _lastAlertTime=now;
+            await alertAdmin(`🏥 <b>Health Check — ${issues.length} Masalah</b>\n\n`+issues.map(i=>`• ${i}`).join('\n')+`\n\nRevenue hari ini: <b>Rp${todayRev.toLocaleString('id-ID')}</b> (${todayCount} order)`);
+          } else {
+            log('DEBUG','SYSTEM','Health check alert di-skip (sama dengan sebelumnya, cooldown 1 jam)');
+          }
+        } else {
+          // Reset hash kalau tidak ada masalah — agar masalah baru berikutnya selalu terkirim
+          _lastAlertHash=null;
         }
         return{issues,todayRev,todayCount};
       }catch(err){log('ERROR','SYSTEM','Health check error: '+err.message);return{issues:['Error: '+err.message],todayRev:0,todayCount:0};}
