@@ -80,17 +80,12 @@ function startSaweriaSSE(bot, onPaymentSuccess) {
               // Jadi item.amount SELALU < order.total_amount -- tidak bisa dibandingkan langsung!
               // Solusi: cari order berdasarkan donation_id, atau gunakan toleransi yang lebih besar
               
-              // Prioritaskan match berdasarkan donation_id
+              // Prioritaskan match berdasarkan donation_id (WAJIB)
               let order = await Order.findOne({ 
                 user_id: userId, 
                 status: 'PENDING',
                 donation_id: item.id // Saweria WS item.id = donation_id
               });
-              
-              // Fallback: ambil order PENDING terbaru jika donation_id tidak cocok
-              if (!order) {
-                order = await Order.findOne({ user_id: userId, status: 'PENDING' }).sort({ created_at: -1 });
-              }
               
               if (order) {
                 // Toleransi: item.amount adalah harga bersih (net), order.total_amount sudah termasuk fee 4%

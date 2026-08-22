@@ -1,21 +1,24 @@
 const mongoose = require('mongoose');
+const logger   = require('./logger');
 
 const uri = process.env.MONGODB_URI || "mongodb://localhost:27017/toko-otomatis";
 
 mongoose.connect(uri)
-  .then(() => console.log("✅ Terhubung ke MongoDB!"))
+  .then(() => logger.system.mongoConnected())
   .catch(err => {
-    console.error("❌ Gagal terhubung ke MongoDB saat startup:", err);
+    logger.error("Gagal terhubung ke MongoDB saat startup:", err.message);
     process.exit(1);
   });
 
 // [BUGFIX 4] Silent DB Disconnect: Paksa restart jika koneksi putus di tengah jalan
 mongoose.connection.on('error', (err) => {
-  console.error("❌ Mongoose Error (Runtime):", err);
+  logger.error("Mongoose Error (Runtime):", err.message);
   process.exit(1); // Force Coolify to restart container
 });
 
 mongoose.connection.on('disconnected', () => {
+  // [BUGFIX] Jangan restart saat test - disconnect adalah perilaku normal setelah test selesai
+  if (process.env.NODE_ENV === 'test') return;
   console.error("⚠️ Koneksi MongoDB terputus! Merestart container untuk pemulihan...");
   process.exit(1);
 });
@@ -35,28 +38,38 @@ const UserSchema = new mongoose.Schema({
 });
 
 const ProductSchema = new mongoose.Schema({
-  _id: String, // Product ID
+  _id: String,
   name: String,
   description: String,
   price: Number,
-  type: String, // 'AUTO' or 'MANUAL'
+  type: String,
   preview_url: String,
+  promo_image_id: String,    // (legacy) single promo media file_id
+  promo_media_type: String,  // (legacy) 'photo' atau 'video'
+  promo_media: [{            // (new) array multi-media: max 5 foto/video
+    file_id: String,
+    type: String             // 'photo' atau 'video'
+  }],
   active: { type: Number, default: 1 }
 });
 
 const StockSchema = new mongoose.Schema({
   product_id: { type: String, ref: 'Product' },
   content: String,
-  status: { type: String, default: 'AVAILABLE' },
+  status: { type: String, enum: ['AVAILABLE', 'SOLD', 'USED'], default: 'AVAILABLE' },
   order_id: String,
   fulfilled_at: Date
 });
+// Index untuk query fulfillOrder (Stock.findOne per product)
+StockSchema.index({ product_id: 1, status: 1 });
 
 const CartSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
   product_id: { type: String, ref: 'Product' },
   quantity: { type: Number, default: 1 }
 });
+// Compound unique index: mencegah duplikat cart item + mempercepat getCart
+CartSchema.index({ user_id: 1, product_id: 1 }, { unique: true });
 
 const OrderSchema = new mongoose.Schema({
   _id: String, // Our Order ID
@@ -79,6 +92,9 @@ const OrderItemSchema = new mongoose.Schema({
   price: Number,
   fulfilled: { type: Number, default: 0 }
 });
+// Indexes untuk fulfillOrder dan buy_now anti-spam check
+OrderItemSchema.index({ order_id: 1 });
+OrderItemSchema.index({ product_id: 1 });
 
 const SettingSchema = new mongoose.Schema({
   _id: String, // key
@@ -95,12 +111,15 @@ const UserEventSchema = new mongoose.Schema({
 // TTL Index: MongoDB akan otomatis hapus event lama setelah 30 hari
 // Data User utama (purchase_count, total_spent, dll) TIDAK ikut terhapus
 UserEventSchema.index({ created_at: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
+// Compound index untuk query CART_ABANDON discount eligibility (applyAutomaticDiscount)
+UserEventSchema.index({ user_id: 1, event_type: 1, created_at: -1 });
 
 const DiscountSchema = new mongoose.Schema({
   code: String, // Or trigger name like 'NEW_USER'
-  type: String, // 'PERCENTAGE', 'FIXED'
+  type: { type: String, enum: ['PERCENTAGE', 'FIXED', 'BUNDLE'] }, // BUNDLE = diskon paket semua produk
+
   value: Number,
-  trigger_event: String, // 'FIRST_TIME', 'LOYALTY', etc
+  trigger_event: { type: String, enum: ['FIRST_TIME', 'LOYALTY', 'CART_ABANDON', 'ALL', null] }, // Cegah typo
   target_user_id: { type: Number, ref: 'User' }, // Optional specific user
   target_product_id: { type: String, ref: 'Product' }, // Optional specific product
   min_purchase: { type: Number, default: 0 },
@@ -114,7 +133,7 @@ const DiscountSchema = new mongoose.Schema({
 const DripLogSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
   product_id: { type: String, ref: 'Product' }, // Produk yang sedang ditawarkan di drip ini
-  campaign_type: { type: String, enum: ['NON_BUYER', 'CROSS_SELL'], default: 'NON_BUYER' },
+  campaign_type: { type: String, enum: ['NON_BUYER', 'CROSS_SELL', 'CART_ABANDON', 'POST_PURCHASE'], default: 'NON_BUYER' },
   stage: { type: Number, default: 1 },           // Tahap saat ini: 1 (awal), 2 (urgensi), 3 (final)
   sent_at: { type: Date, default: Date.now },    // Kapan pesan tahap ini dikirim
   converted: { type: Boolean, default: false },  // true jika user akhirnya beli → stop follow-up
@@ -125,6 +144,10 @@ const DripLogSchema = new mongoose.Schema({
 });
 // TTL 180 hari absolut untuk menghapus data usang yang macet atau sudah converted
 DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
+// Index untuk drip update pada fulfillOrder (updateMany by user_id+converted)
+DripLogSchema.index({ user_id: 1, converted: 1 });
+// Index untuk markDripConverted di scheduler
+DripLogSchema.index({ user_id: 1, product_id: 1 });
 
 const ABTestResultSchema = new mongoose.Schema({
   variant: { type: String, enum: ['A', 'B'] },

@@ -21,6 +21,8 @@
 
 const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult, CronProgress } = require('./database');
 const { Markup } = require('telegraf');
+const logger     = require('./logger');
+
 const cron = require('node-cron');
 let previewModule = null;
 try { previewModule = require('./preview'); } catch(e) { /* preview module optional */ }
@@ -104,15 +106,44 @@ async function buildAllProductsKeyboard(userId, allProducts, discountPercentage 
       )]);
     }
   }
+
+  // Tombol Bundle — tampil jika ada ≥2 produk yang belum dibeli
+  // [FIX] Gunakan 8 char pertama tiap ID agar callback < 64 char (Telegram limit)
+  // Full ID: 24 char × 4 + 3 underscore = 99 char → OVERFLOW
+  // Short ID: 8 char × 4 + 3 underscore = 35 char → AMAN
+  if (unboughtProducts.length >= 2) {
+    const totalNormal   = unboughtProducts.reduce((s, p) => s + (p.price || 0), 0);
+    const bundleDisc    = 20; // 20% bundle discount
+    const totalBundle   = Math.floor(totalNormal * (1 - bundleDisc / 100));
+    const saving        = totalNormal - totalBundle;
+    const shortIds      = unboughtProducts.map(p => String(p._id).slice(0, 8)).join('-');
+    buttons.push([
+      Markup.button.callback(
+        `🎁 BUNDLE HEMAT ${bundleDisc}% — Rp${formatK(totalBundle)} (Hemat Rp${formatK(saving)})`,
+        `buy_bndl_${shortIds}`
+      )
+    ]);
+  }
+
   return { keyboard: Markup.inlineKeyboard(buttons), products: unboughtProducts };
 }
-async function calculateDynamicDiscount(user) {
+// productPrice opsional — jika diisi, diskon di-cap sesuai harga produk
+// Produk < Rp 100rb (misal 50rb & 60rb): max 15% agar tidak terlalu murah
+// Produk >= Rp 100rb (misal 250rb): boleh sampai 30%
+async function calculateDynamicDiscount(user, productPrice = 0) {
   const daysSinceJoin = (Date.now() - new Date(user.joined_at)) / (1000 * 60 * 60 * 24);
   const purchaseCount = user.purchase_count || 0;
   const totalSpent = user.total_spent || 0;
 
+  // Tentukan batas maksimum diskon berdasarkan harga produk
+  // Produk murah (< 100rb): max 15% — jangan sampai terasa "hampir gratis"
+  // Produk mahal (>= 100rb): max 30%
+  const maxDiscount = productPrice > 0 && productPrice < 100000 ? 15 : 30;
+
+  const cap = (pct) => Math.min(pct, maxDiscount);
+
   if (totalSpent > 100000 || purchaseCount >= 5) {
-    return { percentage: 10, title: 'Khusus Member VIP' };
+    return { percentage: cap(10), title: 'Khusus Member VIP' };
   }
   
   if (purchaseCount === 0 && daysSinceJoin > 30) {
@@ -120,44 +151,73 @@ async function calculateDynamicDiscount(user) {
     const prevBigDiscounts = await Discount.countDocuments({
       target_user_id: user._id,
       type: 'PERCENTAGE',
-      value: { $gte: 25 },
+      value: { $gte: 15 },
       created_at: { $gte: ninetyDaysAgo }
     });
     
-    if (prevBigDiscounts >= 2) return { percentage: 25, title: 'Spesial Comeback 25%' };
-    if (prevBigDiscounts === 1) return { percentage: 35, title: 'Spesial Comeback 35%' };
-    return { percentage: 50, title: 'Spesial Comeback 50%' };
+    if (prevBigDiscounts >= 2) return { percentage: cap(15), title: 'Spesial Comeback' };
+    if (prevBigDiscounts === 1) return { percentage: cap(20), title: 'Spesial Comeback' };
+    return { percentage: cap(25), title: 'Spesial Comeback' };
   }
   
   if (purchaseCount === 0 && daysSinceJoin <= 30) {
-    return { percentage: 20, title: 'Diskon Khusus 20%' };
+    return { percentage: cap(15), title: 'Diskon Khusus' };
   }
   
-  return { percentage: 15, title: 'Promo Pelanggan Setia' };
+  return { percentage: cap(10), title: 'Promo Pelanggan Setia' };
 }
 
 async function sendSafe(bot, userId, text, options = {}) {
   try {
     const extra = { parse_mode: 'HTML' };
-    if (options.keyboard && options.keyboard.reply_markup) {
-      extra.reply_markup = options.keyboard.reply_markup;
-    } else if (options.keyboard) {
-      extra.reply_markup = options.keyboard;
+    let replyMarkup = null;
+    if (options.keyboard?.reply_markup) {
+      replyMarkup = options.keyboard.reply_markup;
+    } else if (options.keyboard?.inline_keyboard) {
+      replyMarkup = options.keyboard;
     }
-    
-    if (options.media) {
-      const hType = options.mediaType || "url";
+    if (replyMarkup) extra.reply_markup = replyMarkup;
+
+    // [FIX PESAN PISAH] Selalu kirim teks+tombol dalam 1 pesan.
+    // Media (GIF/foto/video) dikirim DULU sebagai visual, lalu 1 pesan teks+tombol.
+    // Telegram mendukung reply_markup di photo & video tapi TIDAK di animation.
+    // Solusi: sendAnimation tanpa caption, lalu sendMessage dengan teks+tombol.
+
+    if (options.mediaGroup && options.mediaGroup.length > 1) {
+      // Album foto: kirim album dulu (tanpa caption), lalu teks+tombol dalam 1 pesan
+      const mediaArr = options.mediaGroup.map(m => ({
+        type: m.type || 'photo',
+        media: m.file_id
+      }));
+      await bot.telegram.sendMediaGroup(userId, mediaArr);
+      // Kirim teks+tombol sebagai 1 pesan setelah album
+      await bot.telegram.sendMessage(userId, text, extra);
+
+    } else if (options.media) {
+      const hType = options.mediaType || 'url';
       const hFile = options.media;
-      if (hType === "photo" || (hType === "url" && hFile.match(/\.(jpeg|jpg|png)$/i))) {
-        await bot.telegram.sendPhoto(userId, hFile, { caption: text, ...extra });
+      const isPhoto = hType === 'photo' || (hType === 'url' && hFile.match(/\.(jpeg|jpg|png)$/i));
+      const isVideo = hType === 'video';
+
+      if (isPhoto) {
+        // Foto: bisa caption+tombol dalam 1 pesan
+        await bot.telegram.sendPhoto(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+      } else if (isVideo) {
+        // Video: bisa caption+tombol dalam 1 pesan
+        await bot.telegram.sendVideo(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
       } else {
-        await bot.telegram.sendAnimation(userId, hFile, { caption: text, ...extra });
+        // GIF/Animation: kirim GIF dulu (tanpa teks), lalu teks+tombol dalam 1 pesan
+        await bot.telegram.sendAnimation(userId, hFile);
+        await bot.telegram.sendMessage(userId, text, extra);
       }
     } else {
+      // Teks only
       await bot.telegram.sendMessage(userId, text, extra);
     }
     
     await User.findByIdAndUpdate(userId, { last_broadcast_at: new Date() });
+    sentInThisRun.add(String(userId)); // [FIX SPAM] Tandai user sudah dikirim di run ini
+    logger.marketing.sent(userId, options.userName || '?', options.campaign || 'UNKNOWN', options.reason || '-');
     return { ok: true };
   } catch (err) {
     const isBlocked = err.description && (
@@ -165,84 +225,232 @@ async function sendSafe(bot, userId, text, options = {}) {
       err.description.includes('user is deactivated') ||
       err.description.includes('chat not found')
     );
-    if (isBlocked) await User.findByIdAndUpdate(userId, { is_blocked: true });
+    if (isBlocked) {
+      await User.findByIdAndUpdate(userId, { is_blocked: true });
+      logger.user.blocked(userId, err.description);
+    } else {
+      logger.marketing.failed(userId, options.campaign || 'UNKNOWN', err.message);
+    }
     return { ok: false, isBlocked, error: err.message };
   }
 }
 
-// Cek apakah user pernah dikirimi broadcast dalam 6 jam terakhir (Anti-Spam Shield Fast-Paced)
-function isInCooldown(user) {
+// [FIX SPAM] Set in-memory yang di-reset setiap kali runMarketingCampaign dipanggil.
+// Setiap user yang sudah menerima pesan dalam satu run TIDAK akan menerima pesan dari campaign lain.
+// Ini mencegah user mendapat 4x NON_BUYER atau 2x campaign berbeda dalam satu jam.
+const sentInThisRun = new Set();
+
+// Cek apakah user pernah dikirimi broadcast dalam 24 jam terakhir (Anti-Spam Shield)
+// [BUGFIX] Sebelumnya 6 jam - terlalu sering, user bisa terima hingga 4 pesan/hari
+// [FIX P1b] Tambah flag bypass untuk POST_PURCHASE — buyer tidak boleh di-skip
+function isInCooldown(user, { bypassForBuyer = false } = {}) {
   if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false; // Admin kebal cooldown untuk testing
+  if (bypassForBuyer && user.purchase_count > 0) return false; // [FIX] Buyer bypass cooldown untuk POST_PURCHASE
+  // [FIX SPAM] Cek in-memory Set dulu — kalau sudah dikirim di run ini, skip
+  if (sentInThisRun.has(String(user._id))) return true;
   if (!user.last_broadcast_at) return false;
   const hoursSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60);
-  return hoursSinceLast < 6;
+  return hoursSinceLast < 24; // 24 jam = max 1 pesan marketing per hari
 }
+
 
 // ─── CAMPAIGN 1: NON-BUYER ──────────────────────────────────────────────────
 
 // Klasifikasikan kenapa user belum beli
 async function classifyNonBuyer(user) {
-  const lastEvent = await UserEvent.findOne({ user_id: user._id }).sort({ created_at: -1 }).lean();
-  
-  if (lastEvent && lastEvent.event_type === 'CHECKOUT') {
-    const hoursSinceCheckout = (new Date() - new Date(lastEvent.created_at)) / (1000 * 60 * 60);
-    // Upgrade 1: Cart Abandonment instan jika > 30 menit (0.5 jam) tapi < 30 hari
-    if (hoursSinceCheckout >= 0.5 && hoursSinceCheckout <= 30 * 24) {
-      return 'CART_ABANDON';
-    }
-  }
-
   const daysInactive = (new Date() - new Date(user.last_active_at)) / (1000 * 60 * 60 * 24);
-  if (daysInactive > 7) {
-    // Tidak buka bot > 7 hari -> Inactive
-    return 'INACTIVE';
-  }
-
-  // Buka bot, belum pernah klik beli -> Cold Lead
-  return 'COLD_LEAD';
+  if (daysInactive < 1) return 'HOT';
+  if (daysInactive >= 1 && daysInactive <= 7) return 'WARM';
+  if (daysInactive > 7 && daysInactive <= 30) return 'COLD';
+  return 'GHOST';
 }
 
-async function runNonBuyerCampaign(bot) {
-  // ─ CART ABANDON: User udah mau beli tapi kabur ─
-  const msgCartAbandon = await getMsg('cart_abandon',
-    `🔴 <b>Bos, Anda Hampir Dapat Akses {produk}!</b>\n\n` +
-    `Jangan sampai Anda menyesal — ini bukan channel JAV biasa.\n\n` +
-    `🇮🇩 <b>Subtitle Indonesia dikerjakan sendiri oleh tim kami</b>\n` +
-    `<i>Bukan repost, bukan auto-sub. Hasil terjemahan manusia, bukan mesin.</i>\n\n` +
-    `<blockquote>Slot VIP Anda masih tersimpan selama beberapa menit ke depan.</blockquote>\n\n` +
-    `👇 <b>Selesaikan Pembayaran Sekarang</b>`
-  );
+/**
+ * Copywriting dinamis per produk — tidak hardcode JAV lagi.
+ * Dipakai oleh Campaign 1 (Non-Buyer) agar pesan relevan untuk BOOCIL, OME TV, dll.
+ *
+ * @param {Array}  products  - array produk yang belum dibeli user (unboughtProducts)
+ * @param {string} segment   - 'CART_ABANDON' | 'INACTIVE' | 'COLD_LEAD'
+ * @returns {string}         - pesan HTML siap kirim
+ */
+function getProductCopy(products, segment) {
+  // Ambil produk pertama sebagai anchor copy, sisanya disebutkan di keyboard
+  const p = products[0];
+  const name = p ? p.name : 'Channel VIP';
+  const nameList = products.map(pr => `<b>${pr.name}</b>`).join(' &amp; ');
 
-  // ─ INACTIVE: Sudah lama tidak buka bot ─
-  // Angle: Update subtitle terus bertambah, makin banyak kalau nunggu!
-  const msgInactive = await getMsg('inactive',
-    `🇮🇩 <b>Update Subtitle Baru {produk} Sudah Keluar!</b>\n\n` +
-    `Tim J-SUB Collection baru saja selesai menerjemahkan batch subtitle baru.\n\n` +
-    `🎬 Puluhan video baru + subtitle Indo eksklusif\n` +
-    `🔍 Cari & request video langsung via bot\n` +
-    `✅ Bukan repost — subtitle dikerjakan manual oleh admin\n\n` +
-    `<blockquote>Semakin banyak koleksi = harga VIP akan naik. Sekarang masih harga opening.</blockquote>\n\n` +
-    `👇 <b>Gabung VIP Sekarang</b>`
-  );
+  const isJAV    = name.toLowerCase().includes('jav');
+  const isBoocil = name.toLowerCase().includes('boocil');
+  const isViral  = name.toLowerCase().includes('viral') || name.toLowerCase().includes('indo viral');
+  const isOme    = name.toLowerCase().includes('ome') || name.toLowerCase().includes('vcs');
 
-  // ─ COLD LEAD: Belum pernah klik beli ─
-  // Angle: Social proof + unique value yang tidak ada di tempat lain
-  const msgColdLead = await getMsg('cold_lead',
-    `🌟 <b>Kenapa 3.200+ Member Pilih {produk}?</b>\n\n` +
-    `Satu alasan utama: <b>Subtitle Indonesia buatan sendiri.</b>\n\n` +
+  // ── CART ABANDON ────────────────────────────────────────────────
+  if (segment === 'CART_ABANDON') {
+    if (isJAV) return (
+      `🔴 <b>Bos, Akses ${nameList} Masih Menunggumu!</b>\n\n` +
+      `Kamu hampir dapat akses — tinggal satu langkah lagi.\n\n` +
+      `🇮🇩 <b>Subtitle Indonesia dikerjakan tim kami sendiri</b>\n` +
+      `<i>Bukan auto-sub, bukan repost. Terjemahan manusia, bukan mesin.</i>\n\n` +
+      `<blockquote>Slot VIP masih tersimpan. Jangan sampai diambil orang lain.</blockquote>\n\n` +
+      `👇 <b>Selesaikan Pembayaran Sekarang</b>`
+    );
+    if (isBoocil) return (
+      `🔴 <b>Hampir Masuk ke ${nameList}!</b>\n\n` +
+      `Komunitas paling eksklusif ini masih menantimu.\n\n` +
+      `👑 Konten premium eksklusif tiap hari\n` +
+      `🔒 Akses permanen — bayar sekali\n` +
+      `🤝 Member bisa saling share koleksi\n\n` +
+      `<blockquote>Slot terbatas. Jangan sampai penuh sebelum kamu masuk.</blockquote>\n\n` +
+      `👇 <b>Selesaikan Sekarang</b>`
+    );
+    if (isViral) return (
+      `🔴 <b>Konten Viral Indonesia Masih Menunggumu!</b>\n\n` +
+      `Kamu hampir dapat akses ke ${nameList} — video viral Indo paling fresh.\n\n` +
+      `🔥 Dikurasi manual, update rutin\n` +
+      `📱 Konten yang lagi rame dibahas sekarang\n` +
+      `✅ Akses permanen\n\n` +
+      `<blockquote>Jangan sampai ketinggalan konten viral terbaru.</blockquote>\n\n` +
+      `👇 <b>Selesaikan Pembayaran</b>`
+    );
+    if (isOme) return (
+      `🔴 <b>Session OME TV &amp; VCS Menunggumu!</b>\n\n` +
+      `Kamu hampir dapat akses ${nameList} — komunitas session live terbaik.\n\n` +
+      `📡 Jadwal session tiap malam\n` +
+      `💡 Tips &amp; trik eksklusif dari member aktif\n` +
+      `🎯 Partner VCS sesama member\n\n` +
+      `<blockquote>Member lain sudah aktif session malam ini.</blockquote>\n\n` +
+      `👇 <b>Selesaikan Sekarang</b>`
+    );
+    // Generic fallback
+    return (
+      `🔴 <b>Akses ${nameList} Masih Menunggumu!</b>\n\n` +
+      `Kamu hampir masuk — jangan biarkan kesempatan ini hilang.\n\n` +
+      `✅ Akses permanen\n` +
+      `✅ Update rutin tanpa biaya tambahan\n` +
+      `✅ Bayar sekali, nikmati selamanya\n\n` +
+      `<blockquote>Slot VIP terbatas. Selesaikan sekarang.</blockquote>\n\n` +
+      `👇 <b>Selesaikan Pembayaran</b>`
+    );
+  }
+
+  // ── INACTIVE ─────────────────────────────────────────────────────
+  if (segment === 'INACTIVE') {
+    if (isJAV) return (
+      `🎬 <b>Update Baru ${nameList} Sudah Masuk!</b>\n\n` +
+      `Tim kami baru selesai menerjemahkan batch subtitle terbaru.\n\n` +
+      `🇮🇩 Puluhan video baru + subtitle Indonesia eksklusif\n` +
+      `🔍 Request video langsung via bot\n` +
+      `✅ Subtitle manual — bukan auto-generated\n\n` +
+      `<blockquote>Semakin lama nunggu = semakin banyak konten yang kamu lewati.</blockquote>\n\n` +
+      `👇 <b>Gabung VIP Sekarang</b>`
+    );
+    if (isBoocil) return (
+      `👑 <b>Komunitas ${nameList} Makin Ramai!</b>\n\n` +
+      `Ada koleksi baru yang baru diupload member — kamu belum lihat.\n\n` +
+      `📸 Konten eksklusif terbaru sudah masuk\n` +
+      `🔥 Diskusi aktif antar member\n` +
+      `🎁 Request konten spesial ke admin\n\n` +
+      `<blockquote>Member yang gabung duluan dapat harga terbaik.</blockquote>\n\n` +
+      `👇 <b>Gabung Sekarang</b>`
+    );
+    if (isViral) return (
+      `📱 <b>Konten Viral Baru di ${nameList} Sudah Masuk!</b>\n\n` +
+      `Ini yang lagi rame dibahas minggu ini — dan kamu ketinggalan.\n\n` +
+      `🔥 Video viral dikurasi manual tiap hari\n` +
+      `⚡ Update lebih cepat dari channel mana pun\n` +
+      `✅ Hanya ada di sini\n\n` +
+      `<blockquote>Semakin telat = semakin banyak yang kamu lewati.</blockquote>\n\n` +
+      `👇 <b>Akses Sekarang</b>`
+    );
+    if (isOme) return (
+      `📡 <b>Session ${nameList} Malam Ini Sudah Mulai!</b>\n\n` +
+      `Member lain sudah aktif sesi OME TV dan VCS — kamu masih di luar.\n\n` +
+      `🎯 Tips terbaru dari member aktif sudah dibagikan\n` +
+      `📅 Jadwal session eksklusif minggu ini\n` +
+      `🤝 Komunitas makin solid dan aktif\n\n` +
+      `<blockquote>Gabung sekarang sebelum slot penuh.</blockquote>\n\n` +
+      `👇 <b>Masuk Sekarang</b>`
+    );
+    return (
+      `⭐ <b>Update Baru ${nameList} Sudah Masuk!</b>\n\n` +
+      `Sudah lama tidak membuka bot — ada banyak yang baru.\n\n` +
+      `✅ Konten baru diupdate rutin\n` +
+      `✅ Akses permanen sekali bayar\n` +
+      `✅ Tidak ada biaya tambahan\n\n` +
+      `<blockquote>Harga masih opening. Segera naik.</blockquote>\n\n` +
+      `👇 <b>Gabung Sekarang</b>`
+    );
+  }
+
+  // ── COLD LEAD ─────────────────────────────────────────────────────
+  if (isJAV) return (
+    `🌟 <b>Kenapa 3.200+ Member Pilih ${nameList}?</b>\n\n` +
+    `Satu alasan utama: <b>Subtitle Indonesia dikerjakan tim kami sendiri.</b>\n\n` +
     `Di luar sana banyak channel JAV, tapi hampir semua:\n` +
     `❌ Repost dari channel lain\n` +
     `❌ Subtitle mesin (tidak akurat)\n` +
-    `❌ Tidak ada yang bisa di-request\n\n` +
-    `Di <b>{produk}</b>:\n` +
-    `✅ Subtitle 100% dikerjakan tim sendiri\n` +
+    `❌ Tidak bisa di-request\n\n` +
+    `Di <b>${name}</b>:\n` +
+    `✅ Subtitle 100% manual — hasil terjemahan tim kami\n` +
     `✅ Request video via bot, langsung diproses\n` +
-    `✅ Cari video via bot, tanpa scroll capek\n` +
     `✅ Akses permanen, bayar sekali\n\n` +
-    `<blockquote>Harga opening DISKON berlangsung. Segera naik seiring koleksi bertambah.</blockquote>\n\n` +
+    `<blockquote>Harga opening masih berlaku. Segera naik saat koleksi bertambah.</blockquote>\n\n` +
     `👇 <b>Amankan Akses VIP Sekarang</b>`
   );
+  if (isBoocil) return (
+    `👑 <b>Kenapa ${nameList} Beda dari yang Lain?</b>\n\n` +
+    `Ini bukan sekadar channel — ini komunitas eksklusif.\n\n` +
+    `Di luar sana:\n` +
+    `❌ Konten recycle, tidak original\n` +
+    `❌ Tidak ada interaksi\n` +
+    `❌ Admin tidak responsif\n\n` +
+    `Di <b>${name}</b>:\n` +
+    `✅ Konten original &amp; eksklusif tiap hari\n` +
+    `✅ Member aktif saling share koleksi\n` +
+    `✅ Admin responsif — bisa request langsung\n` +
+    `✅ Akses permanen sekali bayar\n\n` +
+    `<blockquote>Komunitas terpilih. Slot terbatas.</blockquote>\n\n` +
+    `👇 <b>Masuk ke Komunitas Sekarang</b>`
+  );
+  if (isViral) return (
+    `🔥 <b>Mau Konten Viral Indo yang Paling Fresh?</b>\n\n` +
+    `${nameList} adalah satu-satunya tempat di mana konten viral dikurasi manual setiap hari.\n\n` +
+    `Di tempat lain:\n` +
+    `❌ Konten sudah beredar lama, basi\n` +
+    `❌ Tidak ada kurasi — asal upload\n\n` +
+    `Di <b>${name}</b>:\n` +
+    `✅ Viral terbaru masuk duluan\n` +
+    `✅ Dikurasi manual — hanya yang terbaik\n` +
+    `✅ Akses permanen, update terus\n\n` +
+    `<blockquote>Kalau kamu suka konten viral Indo, ini tempatnya.</blockquote>\n\n` +
+    `👇 <b>Akses Sekarang</b>`
+  );
+  if (isOme) return (
+    `📡 <b>Mau Jago OME TV &amp; VCS? Ini Komunitasnya.</b>\n\n` +
+    `${nameList} adalah komunitas khusus untuk yang serius belajar dan bermain OME TV.\n\n` +
+    `Yang kamu dapat:\n` +
+    `🎯 Teknik &amp; strategi dari member berpengalaman\n` +
+    `📅 Jadwal session live bareng member\n` +
+    `🤝 Partner VCS sesama member terpercaya\n` +
+    `💡 Tips trik eksklusif yang tidak ada di YouTube\n` +
+    `✅ Akses permanen\n\n` +
+    `<blockquote>Komunitas aktif setiap malam. Jangan ketinggalan.</blockquote>\n\n` +
+    `👇 <b>Gabung Komunitas Sekarang</b>`
+  );
+  // Generic
+  return (
+    `🌟 <b>Kenapa Ribuan Member Pilih ${nameList}?</b>\n\n` +
+    `Konten premium eksklusif yang tidak bisa kamu temukan di tempat lain.\n\n` +
+    `✅ Update rutin tanpa henti\n` +
+    `✅ Admin responsif — request langsung dilayani\n` +
+    `✅ Akses permanen, bayar sekali\n` +
+    `✅ Komunitas member yang aktif\n\n` +
+    `<blockquote>Harga masih opening. Segera naik.</blockquote>\n\n` +
+    `👇 <b>Amankan Akses Sekarang</b>`
+  );
+}
 
+async function runNonBuyerCampaign(bot) {
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
   const nonBuyers = await User.find({ 
     $or: [
@@ -263,11 +471,9 @@ async function runNonBuyerCampaign(bot) {
       { $sort: { count: -1 } },
       { $limit: 1 }
     ]);
-    if (popular.length > 0) {
-      defaultProduct = allProducts.find(p => String(p._id) === String(popular[0]._id)) || allProducts[0];
-    } else {
-      defaultProduct = allProducts[0];
-    }
+    defaultProduct = popular.length > 0
+      ? allProducts.find(p => String(p._id) === String(popular[0]._id)) || allProducts[0]
+      : allProducts[0];
   }
 
   const hType = await getSetting("header_type", "url");
@@ -276,72 +482,164 @@ async function runNonBuyerCampaign(bot) {
   for (const user of nonBuyers) {
     if (isInCooldown(user)) { stats.skipped++; continue; }
 
-    if (defaultProduct) {
-      const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(defaultProduct._id), converted: false }).lean();
-      if (existingDrip) {
-        // [BUGFIX] Stage 5 Recycling: Jika user di-reset ke stage:0, langsung upgrade ke stage:1
-        // agar masuk pipeline lagi. Tanpa ini, user stuck selamanya di stage:0.
-        if (existingDrip.stage === 0) {
-          await DripLog.findByIdAndUpdate(existingDrip._id, { stage: 1, sent_at: new Date() });
-          // Lanjutkan — biarkan user ini diproses dalam iterasi ini
-        } else {
-          stats.skipped++;
-          continue; // Jangan spam Campaign 1 jika user masih dalam Funnel (Stage 1, 2, 3)
-        }
-      }
+    // [FIX] Cek semua produk, skip hanya jika SEMUA produk sudah ada drip aktif
+    const existingDrips = await DripLog.find({ user_id: user._id, converted: false, stage: { $gt: 0 } }).lean();
+    const dripProductIds = new Set(existingDrips.map(d => String(d.product_id)));
+    const allProductsHaveDrip = allProducts.every(p => dripProductIds.has(String(p._id)));
+    if (existingDrips.length > 0) {
+      const stage0Drip = existingDrips.find(d => d.stage === 0);
+      if (stage0Drip) await DripLog.findByIdAndUpdate(stage0Drip._id, { stage: 1, sent_at: new Date() });
+      if (allProductsHaveDrip) { stats.skipped++; continue; }
     }
 
     const segment = await classifyNonBuyer(user);
-    let msg = segment === 'CART_ABANDON' ? msgCartAbandon
-               : segment === 'INACTIVE'     ? msgInactive
-               : msgColdLead;
 
-    // [FIX] Bangun keyboard dengan SEMUA produk yang belum dibeli user
-    const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, 0);
+    // [UPGRADE 3] SMART SEGMENTATION
+    let discountVal = 0;
+    if (segment === 'COLD') discountVal = 15; // Re-engagement discount
+    else if (segment === 'GHOST') discountVal = 20; // Last effort discount
+
+    // Bangun keyboard dengan diskon dinamis
+    const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, discountVal);
     const keyboard = allKeyboard;
 
-    // Ganti placeholder {produk} dengan nama semua produk yang belum dibeli
-    const produkNames = unboughtProducts.length > 0
-      ? unboughtProducts.map(p => `<b>${p.name}</b>`).join(' &amp; ')
-      : (defaultProduct ? defaultProduct.name : 'produk kami');
-    msg = msg.replace(/\{produk\}/g, produkNames);
+    const prodList = unboughtProducts.length > 0 ? unboughtProducts : (defaultProduct ? [defaultProduct] : []);
+    
+    // [BUGFIX BUG-06] Hitung rotationIndex SEBELUM blok if/else agar tersedia di blok HOT
+    const userIdNum = typeof user._id === 'object' ? parseInt(String(user._id).slice(-6), 16) : Number(user._id);
+    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+    const rotationIndex = (userIdNum + dayOfYear) % (prodList.length || 1);
+    
+    const customKey = segment === 'HOT' ? 'hot_lead'
+                    : segment === 'WARM' ? 'warm_lead'
+                    : 'cold_lead';
+    const customMsg = await Setting.findById('marketing_' + customKey).lean();
+    let msg;
+    if (customMsg && customMsg.value) {
+      const produkNames = prodList.map(p => `<b>${p.name}</b>`).join(' &amp; ');
+      msg = customMsg.value.replace(/\{produk\}/g, produkNames);
+    } else {
+      if (segment === 'HOT') {
+        // [AKSI #5] HOT = baru aktif, gunakan social proof + angka nyata (seperti Stage 2 yang 12.6%)
+        const recentBuyers = await Order.countDocuments({
+          status: 'SUCCESS',
+          created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        });
+        const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+        const p = prodList[rotationIndex] || prodList[0];
+        const isJAV = p && p.name.toLowerCase().includes('jav');
+        const socialLine = recentBuyers > 0
+          ? `Dalam 24 jam terakhir, <b>${recentBuyers} orang baru masuk</b>. Total <b>${totalBuyers}+ member</b> sudah punya akses penuh.`
+          : `Sudah <b>${totalBuyers}+ member</b> yang punya akses penuh sekarang.`;
+        msg = isJAV
+          ? `🔑 <b>Akses VIP Tinggal Klik!</b>\n\n` +
+            `${socialLine}\n\n` +
+            `Yang mereka dapat setiap hari:\n` +
+            `🇮🇩 Subtitle Indonesia dibuat tim sendiri — bukan auto-sub\n` +
+            `📥 Request video baru langsung via bot\n` +
+            `✅ Akses permanen, bayar sekali\n\n` +
+            `<blockquote>Mereka sudah di dalam — kamu bisa masuk sekarang juga dalam 30 detik.</blockquote>\n\n` +
+            `👇 <b>Gabung Sekarang</b>`
+          : `🔑 <b>Akses VIP Tinggal Klik!</b>\n\n` +
+            `${socialLine}\n\n` +
+            `<blockquote>Mereka sudah di dalam — kamu bisa masuk sekarang juga.</blockquote>\n\n` +
+            `👇 <b>Gabung Sekarang</b>`;
+      } else if (segment === 'WARM') {
+        // WARM = pernah interaksi, butuh proof
+        const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+        const p = prodList[0];
+        const isJAV = p && p.name.toLowerCase().includes('jav');
+        msg = isJAV
+          ? `🌟 <b>Update subtitle baru sudah masuk!</b>\n\n` +
+            `Tim J-SUB baru selesai mengerjakan batch subtitle minggu ini.\n\n` +
+            `<blockquote>Subtitle ini dikerjakan sendiri — bukan auto-sub, bukan repost.</blockquote>\n\n` +
+            `Sudah <b>${totalBuyers}+ member</b> yang bisa nikmatin sekarang. Kamu belum.\n\n` +
+            `👇 <b>Lihat Koleksi Subtitle VIP</b>`
+          : `🔔 <b>Ada yang baru di koleksi VIP!</b>\n\n` +
+            `Update baru sudah masuk — dan <b>${totalBuyers}+ member</b> sudah bisa akses.\n\n` +
+            `<blockquote>Semakin telat gabung = semakin banyak yang kamu lewati.</blockquote>\n\n` +
+            `👇 <b>Gabung Sekarang</b>`;
+      } else {
+        // COLD/GHOST = sudah lama tidak aktif, butuh re-engagement + diskon
+        const p = prodList[0];
+        const isJAV = p && p.name.toLowerCase().includes('jav');
+        msg = isJAV
+          ? `🎁 <b>Diskon ${discountVal}% khusus buat kamu!</b>\n\n` +
+            `Sudah lama tidak mampir. Kami kasih penawaran khusus hari ini.\n\n` +
+            `Tapi sebelum itu, tau nggak sih apa yang bikin J-SUB beda?\n\n` +
+            `🇮🇩 <b>Subtitle Indonesia dikerjakan sendiri oleh tim J-SUB.</b>\n` +
+            `Bukan auto-sub. Bukan repost. Terjemahan manusia.\n\n` +
+            `<blockquote>Koleksi subtitle terus bertambah. Semakin lama kamu tunggu, semakin banyak yang kamu lewati.</blockquote>\n\n` +
+            `👇 <b>Ambil Diskon ${discountVal}% Sekarang</b>`
+          : `🎁 <b>Diskon ${discountVal}% masih berlaku buat kamu!</b>\n\n` +
+            `Sudah lama tidak mampir — kami siapkan penawaran spesial.\n\n` +
+            `Akses VIP permanen + koleksi yang terus bertambah, dengan harga lebih murah.\n\n` +
+            `<blockquote>Diskon hangus dalam 24 jam.</blockquote>\n\n` +
+            `👇 <b>Klaim Diskon Sekarang</b>`;
+      }
+    }
 
-    // 🔥 KIRIM PREVIEW DULU sebelum teks promo (bila ada cache preview dari grup VIP)
-    // Ini membuat user melihat konten nyata sebelum pitch = konversi jauh lebih tinggi
+    // Jika memberi diskon, simpan ke database diskon
+    if (discountVal > 0) {
+      await Discount.create({
+        target_user_id: Number(user._id),
+        target_product_id: null,
+        type: 'PERCENTAGE',
+        value: discountVal,
+        valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 jam expire
+        active: true
+      });
+    }
+
+    // 🔥 Kirim preview dulu agar user lihat konten nyata sebelum pitch
     if (previewModule) {
       try {
         await previewModule.sendPreviewToUser(bot, user._id, 3);
-        await delay(800); // Jeda sebentar agar preview tampil lebih dulu
-      } catch(e) { /* preview gagal = skip saja, jangan crash campaign */ }
+        await delay(800);
+      } catch(e) { /* preview gagal = skip, jangan crash campaign */ }
     }
 
-    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
+    // [FIX ROTASI PRODUK] Pilih produk yang dipromote berdasarkan hash userId
+    // Tiap user dapat produk berbeda — bukan cuma produk pertama terus
+    const firstPromo = prodList[rotationIndex] || prodList[0];
+    const promoMediaArr = firstPromo?.promo_media?.length > 1 ? firstPromo.promo_media : null;
+    const promoImg  = firstPromo?.promo_image_id || hFile;
+    const promoType = firstPromo?.promo_image_id ? (firstPromo.promo_media_type || 'photo') : hType;
+    const sendOpts  = promoMediaArr
+      ? { mediaGroup: promoMediaArr, keyboard, campaign: `NON_BUYER_${segment}`, userName: user.first_name || '?', reason: firstPromo?.name || '-' }
+      : { media: promoImg, mediaType: promoType, keyboard, campaign: `NON_BUYER_${segment}`, userName: user.first_name || '?', reason: firstPromo?.name || '-' };
+
+    const result = await sendSafe(bot, user._id, msg, sendOpts);
     if (result.ok) {
       if (segment === 'CART_ABANDON') stats.abandon++;
       else if (segment === 'INACTIVE') stats.inactive++;
       else stats.cold++;
 
-      if (defaultProduct) {
-        // Upgrade 2: Berikan Diskon 10% sejak Stage 1 untuk CART_ABANDON agar segera convert
-        let initialDiscount = 0;
-        if (segment === 'CART_ABANDON') {
-          initialDiscount = 10;
+      // Buat DripLog untuk setiap produk yang belum dibeli
+      const unboughtForDrip = prodList;
+      for (const dripProd of unboughtForDrip) {
+        const existingForProd = await DripLog.findOne({
+          user_id: user._id,
+          product_id: String(dripProd._id),
+          converted: false
+        }).lean();
+        if (existingForProd) continue;
+
+        if (segment === 'CART_ABANDON' && String(dripProd._id) === String(unboughtForDrip[0]._id)) {
           await Discount.create({
             target_user_id: Number(user._id),
             type: 'PERCENTAGE',
-            value: initialDiscount,
+            value: 10,
             valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
           });
         }
 
-        await DripLog.create({
-          user_id: user._id,
-          product_id: String(defaultProduct._id),
-          campaign_type: 'NON_BUYER',
-          stage: 1,
-          sent_at: new Date(),
-          variant: Math.random() > 0.5 ? 'A' : 'B'
-        });
+        // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
+        await DripLog.findOneAndUpdate(
+          { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1, converted: false },
+          { $setOnInsert: { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
+          { upsert: true }
+        );
       }
     } else {
       stats.failed++;
@@ -352,6 +650,7 @@ async function runNonBuyerCampaign(bot) {
 }
 
 // ─── CAMPAIGN 2: CROSS-SELL + SMART RECOMMENDATION ─────────────────────────
+
 
 async function getBoughtProductIds(userId) {
   const successOrders = await Order.find({ user_id: userId, status: 'SUCCESS' }).lean();
@@ -424,14 +723,6 @@ async function getSmartRecommendation(userId, boughtIds, allProducts) {
 async function runCrossSellCampaign(bot, allProducts) {
   if (allProducts.length < 2) return { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
-  const msgTemplate = await getMsg('cross_sell',
-    '\u{1F451} *Upgrade ke {produk_baru}!*\n' +
-    'Punya {produk_lama} belum cukup.\n\n' +
-    '\u27DF VIP Permanen\n' +
-    '\u27DF Update Otomatis\n\n' +
-    '\u{1F447} Order sekarang'
-  );
-
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
   const partialBuyers = await User.find({ 
     purchase_count: { $gt: 0 }, 
@@ -450,36 +741,103 @@ async function runCrossSellCampaign(bot, allProducts) {
     const boughtIds = await getBoughtProductIds(user._id);
     if (boughtIds.length >= totalCount) { stats.complete++; continue; }
 
-    // Smart Recommendation (bukan lagi sekedar urutan database)
     const targetProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
     if (!targetProduct) { stats.skipped++; continue; }
 
+    // [FIX] Guard duplikat: skip jika sudah pernah dapat cross-sell produk ini hari ini
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const alreadySentToday = await DripLog.findOne({
+      user_id: user._id,
+      product_id: String(targetProduct._id),
+      campaign_type: 'CROSS_SELL',
+      sent_at: { $gte: todayStart }
+    }).lean();
+    if (alreadySentToday) { stats.skipped++; continue; }
+
     const boughtNames = allProducts
       .filter(p => boughtIds.includes(String(p._id)))
-      .map(p => p.name).join(' & ') || 'VIP';
+      .map(p => p.name).join(' &amp; ') || 'VIP';
 
-    const msg = msgTemplate
-      .replace('{nama}', user.first_name || 'Kamu')
-      .replace('{produk_lama}', boughtNames)
-      .replace('{produk_baru}', targetProduct.name);
+    const name = user.first_name || 'Bos';
+    const tgt  = targetProduct.name;
+
+    // [FIX] Pakai HTML bukan Markdown (*bold*) — sendSafe kirim parse_mode HTML
+    // [FIX] Pesan lebih informatif dan personal
+    const isJAV    = tgt.toLowerCase().includes('jav');
+    const isBoocil = tgt.toLowerCase().includes('boocil');
+    const isViral  = tgt.toLowerCase().includes('viral');
+    const isOme    = tgt.toLowerCase().includes('ome') || tgt.toLowerCase().includes('vcs');
+
+    let msg;
+    if (isJAV) {
+      msg = `🎬 <b>${name}, ada yang kamu belum punya nih!</b>\n\n` +
+            `Kamu sudah punya <b>${boughtNames}</b> — tapi belum punya akses ke <b>${tgt}</b>.\n\n` +
+            `🇮🇩 Subtitle Indonesia 100% manual, bukan mesin\n` +
+            `🔍 Request &amp; cari video langsung via bot\n` +
+            `✅ Akses permanen — bayar sekali\n\n` +
+            `<blockquote>Member ${boughtNames} biasanya juga ambil ${tgt} untuk koleksi lengkap.</blockquote>\n\n` +
+            `👇 <b>Lengkapi Koleksi VIP Sekarang</b>`;
+    } else if (isBoocil) {
+      msg = `👑 <b>${name}, koleksi VIP kamu belum lengkap!</b>\n\n` +
+            `Kamu sudah punya <b>${boughtNames}</b> — selanjutnya upgrade ke <b>${tgt}</b>.\n\n` +
+            `📸 Konten eksklusif yang tidak ada di mana pun\n` +
+            `🤝 Komunitas member aktif, bisa saling share\n` +
+            `✅ Akses permanen\n\n` +
+            `<blockquote>Gabungan ${boughtNames} + ${tgt} = koleksi paling lengkap.</blockquote>\n\n` +
+            `👇 <b>Upgrade Sekarang</b>`;
+    } else if (isViral) {
+      msg = `📱 <b>${name}, jangan sampai ketinggalan konten viral!</b>\n\n` +
+            `Kamu sudah punya <b>${boughtNames}</b> — tambah <b>${tgt}</b> untuk koleksi makin kenceng.\n\n` +
+            `🔥 Video viral Indonesia dikurasi manual tiap hari\n` +
+            `⚡ Update lebih cepat dari channel lain\n` +
+            `✅ Akses permanen\n\n` +
+            `<blockquote>Banyak member ${boughtNames} juga aktif di ${tgt}.</blockquote>\n\n` +
+            `👇 <b>Akses Sekarang</b>`;
+    } else if (isOme) {
+      msg = `📡 <b>${name}, komunitas OME TV &amp; VCS lagi aktif!</b>\n\n` +
+            `Kamu sudah punya <b>${boughtNames}</b> — coba tambah <b>${tgt}</b>.\n\n` +
+            `🎯 Teknik &amp; strategi dari member berpengalaman\n` +
+            `📅 Jadwal session live eksklusif\n` +
+            `✅ Akses permanen\n\n` +
+            `<blockquote>Member ${boughtNames} biasanya juga main di ${tgt}.</blockquote>\n\n` +
+            `👇 <b>Gabung Sekarang</b>`;
+    } else {
+      msg = `⭐ <b>${name}, koleksi VIP kamu belum lengkap!</b>\n\n` +
+            `Kamu sudah punya <b>${boughtNames}</b> — upgrade ke <b>${tgt}</b> untuk akses lebih luas.\n\n` +
+            `✅ Konten eksklusif\n✅ Update rutin\n✅ Akses permanen\n\n` +
+            `<blockquote>Banyak member ${boughtNames} juga aktif di ${tgt}.</blockquote>\n\n` +
+            `👇 <b>Upgrade Sekarang</b>`;
+    }
 
     const keyboard = buildProductMarkup(targetProduct);
+    const crossMediaArr  = targetProduct.promo_media?.length > 1 ? targetProduct.promo_media : null;
+    const crossPromoImg  = targetProduct.promo_image_id || hFile;
+    const crossPromoType = targetProduct.promo_image_id ? (targetProduct.promo_media_type || 'photo') : hType;
+    const crossSendOpts  = crossMediaArr
+      ? { mediaGroup: crossMediaArr, keyboard, campaign: 'CROSS_SELL', userName: user.first_name || '?', reason: targetProduct?.name || '-' }
+      : { media: crossPromoImg, mediaType: crossPromoType, keyboard, campaign: 'CROSS_SELL', userName: user.first_name || '?', reason: targetProduct?.name || '-' };
 
-    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
+    const result = await sendSafe(bot, user._id, msg, crossSendOpts);
     if (result.ok) {
-      // Simpan ke DripLog untuk follow-up bertingkat
-      const existingDrip = await DripLog.findOne({ user_id: user._id, product_id: String(targetProduct._id), converted: false }).lean();
-      if (!existingDrip) {
-        await DripLog.create({
-          user_id: user._id,
-          product_id: String(targetProduct._id),
-          campaign_type: 'CROSS_SELL',
-          stage: 1,
-          sent_at: new Date(),
-          variant: Math.random() > 0.5 ? 'A' : 'B'
-        });
-      }
+      // Update cooldown agar tidak kirim ulang di cron berikutnya
+      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
 
+      const existingDrip = await DripLog.findOne({
+        user_id: user._id,
+        product_id: String(targetProduct._id),
+        converted: false
+      }).lean();
+      if (!existingDrip) {
+        // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
+        await DripLog.findOneAndUpdate(
+          { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1, converted: false },
+          { $setOnInsert: { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
+          { upsert: true }
+        );
+      } else {
+        // Update sent_at agar stage 2/3 timer dihitung dari sekarang
+        await DripLog.findByIdAndUpdate(existingDrip._id, { sent_at: new Date() });
+      }
       stats.crossSell++;
     } else {
       stats.failed++;
@@ -506,16 +864,65 @@ async function runDripFollowUp(bot) {
     console.error('[DRIP] Gagal eksekusi 90-day hard cap:', err);
   }
 
-  const sixHoursAgo = new Date(now.getTime() - (6 * 60 * 60 * 1000));
-  const twelveHoursAgo = new Date(now.getTime() - (12 * 60 * 60 * 1000));
 
-  const hType = await getSetting("header_type", "url");
-  const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
-  // === Stage 2: Kirim urgensi ke yang sudah 6 jam di stage 1 dan belum beli ===
+  const hType = await getSetting('header_type', 'url');
+  const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+
+  // ─── HELPER: Ambil media header per produk ─────────────────────────────
+  // Jika produk punya promo_image_id sendiri → pakai itu (lebih menarik, sesuai produk)
+  // Jika tidak → fallback ke header global
+  function getProductMedia(product) {
+    if (product && product.promo_image_id) {
+      return { file: product.promo_image_id, type: product.promo_media_type || 'photo' };
+    }
+    return { file: hFile, type: hType };
+  }
+
+  // ─── HELPER: Copy per kategori produk ──────────────────────────────────
+  // Tiap produk punya hook yang berbeda sesuai kontennya
+  function getProductHook(product, stage) {
+    const name = product ? product.name : 'Channel VIP';
+    const isJAV     = name.toLowerCase().includes('jav');
+    const isBoocil  = name.toLowerCase().includes('boocil');
+    const isViral   = name.toLowerCase().includes('viral') || name.toLowerCase().includes('indo');
+    const isOme     = name.toLowerCase().includes('ome') || name.toLowerCase().includes('vcs');
+
+    if (stage === 2) {
+      // Stage 2: Social proof + curiosity — apa yang mereka missed
+      if (isJAV)    return `🎬 Video baru masuk tadi malam. Subtitle Indo-nya sudah siap. Member VIP langsung bisa nonton — kamu belum.`;
+      if (isBoocil) return `👑 Komunitas ${name} makin rame. Ada yang udah upload koleksi baru tadi pagi. Sayang kalau kelewat.`;
+      if (isViral)  return `🔥 Konten viral terbaru sudah masuk ke ${name}. Ini yang lagi rame dibahas member sekarang.`;
+      if (isOme)    return `📡 Session OME TV & VCS member malem ini udah jalan. Kamu masih di luar.`;
+      return `🔒 Update terbaru sudah masuk ke ${name}. Member VIP sudah bisa akses — kamu belum.`;
+    }
+
+    if (stage === 3) {
+      // Stage 3: Value proof — tunjukkan isi konkret
+      if (isJAV)    return `🎞️ Koleksi ${name}: ratusan video subtitle Indonesia manual, update rutin, request bebas. Bayar sekali, akses selamanya.`;
+      if (isBoocil) return `👑 ${name}: komunitas eksklusif, konten premium tiap hari, sesama member saling share. Investasi kecil, value besar.`;
+      if (isViral)  return `📱 ${name}: konten viral Indo paling fresh, dikurasi manual tim kami. Tidak ada di tempat lain.`;
+      if (isOme)    return `🎥 ${name}: jadwal session live, tips & trik OME TV, partner VCS sesama member. Komunitas aktif.`;
+      return `⭐ ${name}: konten premium eksklusif yang tidak bisa kamu temukan di tempat lain.`;
+    }
+
+    return name;
+  }
+
+  // ─── Timing Agresif tapi Natural ────────────────────────────────────────
+  // Hari 1: Stage 1 — Perkenalan + hook (Campaign 1 / Non-Buyer)
+  // Hari 2: Stage 2 — Social proof, apa yang mereka missed (1 hari setelah Stage 1)
+  // Hari 4: Stage 3 — Value proof + diskon personal (2 hari setelah Stage 2)
+  // Hari 9: Stage 4 — Penawaran terakhir (5 hari setelah Stage 3)
+  // = Total 4 pesan dalam 9 hari — aggressive tapi tidak terasa spam
+  const oneDayAgo  = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000);
+  const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+  const fiveDaysAgo = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000);
+
+  // === Stage 2: Hari ke-2 — Social Proof & Curiosity ===
   const stage1Logs = await DripLog.find({
     stage: 1,
-    sent_at: { $lte: sixHoursAgo },
+    sent_at: { $lte: oneDayAgo },
     converted: false
   }).lean();
 
@@ -527,10 +934,6 @@ async function runDripFollowUp(bot) {
         continue;
       }
 
-      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-      const forceSend = new Date(log.sent_at) <= fourteenDaysAgo;
-      if (!forceSend && isInCooldown(user)) continue;
-
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
         continue;
@@ -543,50 +946,49 @@ async function runDripFollowUp(bot) {
       }
 
       const product = await Product.findById(log.product_id).lean();
-      const productName = product ? product.name : 'produk pilihan kami';
+      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const hook = getProductHook(product, 2);
+      const name = user.first_name || 'Bos';
+      const productName = product ? product.name : 'Channel VIP';
 
-      // Stage 2: PANIC + PERSONAL. Nama user dipanggil, unique value ditonjolkan!
+      // Total buyers — social proof angka nyata
+      const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+
       const msg = log.variant === 'B'
-        ? `📹 <b>${user.first_name || 'Bos'}, Ini Yang Anda Lewatkan di ${productName}:</b>\n\n` +
-          `Baru saja tim kami selesai translate subtitle untuk 5 video baru.\n` +
-          `Member VIP sudah bisa nonton. Anda belum.\n\n` +
-          `🇮🇩 Subtitle Indonesia manual (bukan mesin)\n` +
-          `🔍 Request & cari video via bot 24 jam\n` +
-          `♾️ Akses selamanya, bayar sekali\n\n` +
-          `<blockquote>Channel masih baru = harga masih opening. Sebentar lagi naik.</blockquote>\n\n` +
-          `👇 <b>Gabung Sebelum Harga Naik</b>`
-        : `⚠️ <b>${user.first_name || 'Bos'}, Slot VIP Menyempit!</b>\n\n` +
-          `<b>${productName}</b> bukan channel repost biasa.\n` +
-          `Semua subtitle Indo dikerjakan manual oleh tim kami.\n\n` +
-          `Fakta: harga akan naik otomatis seiring koleksi bertambah.\n` +
-          `Sekarang masih harga opening terbaik.\n\n` +
-          `<blockquote>Jangan tunda lagi — rugi kalau bayar lebih mahal nanti.</blockquote>\n\n` +
-          `👇 <b>Kunci Harga Opening Sekarang</b>`;
+        ? `👀 <b>${name}, satu hal yang bikin penasaran...</b>\n\n` +
+          `${hook}\n\n` +
+          `Sudah <b>${totalBuyers}+ member</b> yang gabung bulan ini.\n` +
+          `Mereka yang masuk duluan dapat harga terbaik.\n\n` +
+          `<blockquote>Harga masih opening — belum naik. Tapi tidak akan selamanya.</blockquote>\n\n` +
+          `👇 <b>Lihat Apa yang Kamu Lewatkan</b>`
+        : `📌 <b>${name}, update dari ${productName}:</b>\n\n` +
+          `${hook}\n\n` +
+          `Minggu ini saja sudah ada <b>${Math.floor(totalBuyers * 0.3)}+ member baru</b> yang masuk.\n\n` +
+          `<blockquote>Semakin telat gabung = semakin banyak konten yang kamu lewatin.</blockquote>\n\n` +
+          `👇 <b>Gabung Sekarang</b>`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product);
 
-      const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
+      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D3', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
         stats.stage2++;
       } else {
-        if (result.isBlocked) {
-          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
-        }
+        if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
         stats.failed++;
       }
       await delay(1500);
     } catch (err) {
-      console.error(`[DRIP] Error di Stage 2 untuk log ${log._id} (User: ${log.user_id}):`, err);
+      console.error(`[DRIP] Error Stage 2 user ${log.user_id}:`, err);
       continue;
     }
   }
 
-  // === Stage 3: Final reminder + diskon khusus ke yang sudah 12 jam di stage 2 ===
+  // === Stage 3: Hari ke-4 — Value Proof + Diskon Personal ===
   const stage2Logs = await DripLog.find({
     stage: 2,
-    sent_at: { $lte: twelveHoursAgo },
+    sent_at: { $lte: twoDaysAgo },
     converted: false
   }).lean();
 
@@ -597,10 +999,6 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
         continue;
       }
-
-      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-      const forceSend = new Date(log.sent_at) <= fourteenDaysAgo;
-      if (!forceSend && isInCooldown(user)) continue;
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
@@ -614,64 +1012,61 @@ async function runDripFollowUp(bot) {
       }
 
       const product = await Product.findById(log.product_id).lean();
-      const discountRule = await calculateDynamicDiscount(user);
+      const discountRule = await calculateDynamicDiscount(user, product ? product.price : 0);
       const discountAmount = product ? Math.floor(product.price * (discountRule.percentage / 100)) : 0;
-      
-      // Psikologi Stage 3: PERSONAL DISCOUNT + TRUST. Diskon terasa eksklusif untuk dia saja!
+      const finalPrice = product ? product.price - discountAmount : 0;
+      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const hook = getProductHook(product, 3);
+      const name = user.first_name || 'Bos';
+
       const msg = log.variant === 'B'
-        ? `💌 <b>${user.first_name || 'Bos'}, Ini Pesan Pribadi dari Tim Kami</b>\n\n` +
-          `Kami perhatikan Anda sudah 2x melihat ${product ? product.name : 'channel kami'} tapi belum bergabung.\n\n` +
-          `Kami ingin Anda di dalam, jadi kami siapkan:\n\n` +
-          `🎁 <b>Kupon Diskon ${discountRule.percentage}% - Khusus untuk Anda</b>\n` +
-          `⏳ <i>Berlaku hanya 72 jam ke depan</i>\n\n` +
-          `<blockquote>Harga sudah otomatis terpotong di tombol di bawah.</blockquote>\n\n` +
-          `👇 <b>Pakai Diskon Saya Sekarang</b>`
-        : `💥 <b>FLASH DEAL: Diskon ${discountRule.percentage}% Untuk ${user.first_name || 'Anda'}!</b>\n\n` +
-          `Sistem kami secara otomatis mendeteksi bahwa Anda layak mendapat harga spesial.\n\n` +
-          `Ini yang Anda dapatkan:\n` +
-          `✅ Akses ${product ? product.name : 'VIP'} selamanya\n` +
-          `✅ Update harian JAV Sub Indo\n` +
-          `✅ Harga ${discountRule.percentage}% lebih murah dari harga normal\n\n` +
-          `<blockquote>Kupon hangus dalam 72 jam. Tidak bisa diperpanjang.</blockquote>\n\n` +
-          `👇 <b>Klaim Diskon ${discountRule.percentage}% Saya</b>`;
+        ? `💌 <b>Pesan khusus untuk ${name}</b>\n\n` +
+          `${hook}\n\n` +
+          `Karena kamu sudah tertarik tapi belum sempat masuk, kami siapkan:\n\n` +
+          `🎁 <b>Diskon ${discountRule.percentage}% — Khusus untuk kamu</b>\n` +
+          `💰 Harga jadi: <b>Rp ${finalPrice.toLocaleString('id-ID')}</b>\n` +
+          `⏳ <i>Berlaku 72 jam</i>\n\n` +
+          `<blockquote>Harga ini tidak akan muncul lagi setelah 3 hari.</blockquote>\n\n` +
+          `👇 <b>Klaim Harga Spesial Saya</b>`
+        : `🔥 <b>${name}, diskon ${discountRule.percentage}% sudah disiapkan!</b>\n\n` +
+          `${hook}\n\n` +
+          `Sistem kami otomatis pilih kamu untuk dapat harga ini:\n` +
+          `✅ Akses penuh selamanya\n` +
+          `✅ Update rutin tanpa biaya tambahan\n` +
+          `✅ Harga spesial: <b>Rp ${finalPrice.toLocaleString('id-ID')}</b> (hemat ${discountRule.percentage}%)\n\n` +
+          `<blockquote>Diskon hangus dalam 72 jam. Tidak bisa diperpanjang.</blockquote>\n\n` +
+          `👇 <b>Pakai Diskon Sekarang</b>`;
 
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product, discountAmount);
 
-      const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard });
+      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D7', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
-        
-        // Simpan riwayat diskon yang diberikan (72 jam = 3 hari agar user sempat pakai)
-        // FIX: target_user_id harus Number, valid_until 72 jam bukan 24 jam
         await Discount.create({
           target_user_id: Number(user._id),
           type: 'PERCENTAGE',
           value: discountRule.percentage,
           valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
         });
-
         stats.stage3++;
       } else {
-        if (result.isBlocked) {
-          await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
-        }
+        if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
         stats.failed++;
       }
       await delay(1500);
     } catch (err) {
-      console.error(`[DRIP] Error di Stage 3 untuk log ${log._id} (User: ${log.user_id}):`, err);
+      console.error(`[DRIP] Error Stage 3 user ${log.user_id}:`, err);
       continue;
     }
   }
 
   
-  // === Stage 4 (Upgrade): Down-sell Ekstrem 70% untuk user yang abaikan Stage 3 > 7 hari ===
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  // === Stage 4: Hari ke-9 — Penawaran Terakhir (5 hari setelah Stage 3) ===
+  // [FIX] Hapus filter campaign_type:'NON_BUYER' — CROSS_SELL juga harus dapat Stage 4
   const stage3Logs = await DripLog.find({
     stage: 3,
-    campaign_type: 'NON_BUYER', // SUPER PENTING: Hanya untuk yang belum pernah beli!
-    sent_at: { $lte: sevenDaysAgo },
+    sent_at: { $lte: fiveDaysAgo },
     converted: false
   }).lean();
 
@@ -682,7 +1077,6 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
         continue;
       }
-      if (isInCooldown(user)) continue;
 
       const product = await Product.findById(log.product_id).lean();
       if (!product) {
@@ -690,26 +1084,32 @@ async function runDripFollowUp(bot) {
          continue;
       }
 
-      const msgStage4 = `🚨 <b>KESEMPATAN TERAKHIR: DISKON CUCI GUDANG 70%!</b>\n\n` +
-                        `Ini adalah penawaran terakhir dan paling gila dari kami untuk <b>{produk}</b>.\n` +
-                        `Jika Anda melewatkan ini, penawaran tidak akan pernah muncul lagi.\n\n` +
-                        `<blockquote>Klaim diskon 70% Anda sekarang sebelum akses ditutup selamanya.</blockquote>`;
+      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const stage4DiscPct = product.price < 100000 ? 15 : 30;
+      const discountAmount = Math.floor(product.price * (stage4DiscPct / 100));
+      const finalPrice = product.price - discountAmount;
+      const name = user.first_name || 'Bos';
 
-      let finalMsg = msgStage4.replace(/{produk}/g, product.name);
-      const discountAmount = Math.floor(product.price * 0.7); // 70%
-      const keyboard = buildProductMarkup(product, discountAmount); 
+      const msgStage4 =
+        `⏰ <b>${name}, ini pesan terakhir dari kami.</b>\n\n` +
+        `Kami sudah kirim beberapa kali karena kami yakin <b>${product.name}</b> cocok untuk kamu.\n\n` +
+        `Setelah ini kami tidak akan ganggu lagi.\n\n` +
+        `Tapi sebelum kami tutup penawaran ini — kami kasih diskon terakhir:\n` +
+        `💰 <b>Diskon ${stage4DiscPct}% → Harga jadi Rp ${finalPrice.toLocaleString('id-ID')}</b>\n` +
+        `⏳ Berlaku 72 jam saja.\n\n` +
+        `<blockquote>Setelah ini tidak ada lagi penawaran harga khusus untuk produk ini.</blockquote>\n\n` +
+        `👇 <b>Ini Kesempatan Terakhir Saya</b>`;
 
-      const result = await sendSafe(bot, user._id, finalMsg, { media: hFile, mediaType: hType, keyboard });
+      const keyboard = buildProductMarkup(product, discountAmount);
+      const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D30', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
-        
         await Discount.create({
           target_user_id: Number(user._id),
           type: 'PERCENTAGE',
-          value: 70, // 70% discount for escape hatch
+          value: stage4DiscPct,
           valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
         });
-
         stats.stage4 = (stats.stage4 || 0) + 1;
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
@@ -717,10 +1117,12 @@ async function runDripFollowUp(bot) {
       }
       await delay(1500);
     } catch (err) {
-      console.error('[DRIP] Error di Stage 4', err);
+      console.error('[DRIP] Error Stage 4', err);
       continue;
     }
   }
+
+
 
   // === Stage 5 (Recycling): Masukkan ulang ke pipeline setelah 14 hari ===
   const fourteenDaysAgoForReset = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
@@ -757,9 +1159,175 @@ async function runDripFollowUp(bot) {
   return stats;
 }
 
-// Fungsi publik: tandai DripLog sebagai converted saat user beli
-// Dipanggil dari store.js saat fulfillOrder
-async function markDripConverted(userId, amount = 0) {
+// ─── [W9] POST-PURCHASE FOLLOW-UP ────────────────────────────────────────────
+// Stage 2 (3 hari): tips penggunaan + minta review
+// Stage 3 (7 hari): cross-sell produk lain + diskon 10%
+async function runPostPurchaseFollowUp(bot) {
+  const stats = { stage2: 0, stage3: 0, skipped: 0 };
+  const now   = new Date();
+  const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+  const allProducts  = await Product.find({ active: 1 }).lean();
+  const hType = await getSetting('header_type', 'url');
+  const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+
+  // ── Stage 2: Hari ke-3 — Tips + Review Request ───────────────────────────
+  const ppStage1 = await DripLog.find({
+    campaign_type: 'POST_PURCHASE',
+    stage: 1,
+    sent_at: { $lte: threeDaysAgo },
+    converted: false
+  }).lean();
+
+  for (const log of ppStage1) {
+    const user = await User.findById(log.user_id).lean();
+    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+
+    const product = await Product.findById(log.product_id).lean();
+    const name    = user.first_name || 'Bos';
+    const pName   = product ? product.name : 'Channel VIP';
+    const isJAV   = pName.toLowerCase().includes('jav');
+    const isBoocil= pName.toLowerCase().includes('boocil');
+    const isOme   = pName.toLowerCase().includes('ome') || pName.toLowerCase().includes('vcs');
+
+    let tips;
+    if (isJAV)     tips = `🔍 Cari video favorit langsung via bot\n📥 Request subtitle untuk video baru\n🔔 Nyalakan notifikasi agar tidak ketinggalan update`;
+    else if (isBoocil) tips = `📸 Lihat konten member aktif di channel\n🤝 Kenalan dengan member lain di komunitas\n🔔 Post koleksi kamu biar dapat feedback`;
+    else if (isOme) tips = `📅 Cek jadwal session live malam ini\n🎯 Baca tips dari member senior di channel\n🤝 Minta pair dengan member aktif`;
+    else tips = `✅ Akses channel VIP kamu sudah aktif\n🔔 Nyalakan notifikasi Telegram agar tidak ketinggalan\n💬 DM admin jika butuh bantuan`;
+
+    const days = Math.round((now - new Date(log.sent_at)) / 86400000);
+    const msg =
+      `🎉 <b>${name}, akses VIP kamu sudah aktif ${days} hari!</b>\n\n` +
+      `Sudah coba semua fitur di <b>${pName}</b>? Ini 3 hal yang sering dilewatkan member baru:\n\n` +
+      `${tips}\n\n` +
+      `<blockquote>Ada kendala akses atau pertanyaan? Langsung balas pesan ini — admin aktif.</blockquote>\n\n` +
+      `⭐ <b>Senang dengan ${pName}? Ceritain ke teman kamu ya!</b>`;
+
+    const media  = product?.promo_image_id || hFile;
+    const mType  = product?.promo_image_id ? (product.promo_media_type || 'photo') : hType;
+    const result = await sendSafe(bot, user._id, msg, { media, mediaType: mType, campaign: 'CART_ABANDON_1H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    if (result.ok) {
+      await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
+      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+      stats.stage2++;
+    } else { stats.skipped++; }
+    await delay(1500);
+  }
+
+  // ── Stage 3: Hari ke-7 — Cross-sell produk lain + Diskon 10% ─────────────
+  const ppStage2 = await DripLog.find({
+    campaign_type: 'POST_PURCHASE',
+    stage: 2,
+    sent_at: { $lte: sevenDaysAgo },
+    converted: false
+  }).lean();
+
+  for (const log of ppStage2) {
+    const user = await User.findById(log.user_id).lean();
+    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+
+    const boughtIds  = await getBoughtProductIds(user._id);
+    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
+    if (!nextProduct) {
+      await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'COMPLETE' });
+      continue;
+    }
+
+    const boughtProd = await Product.findById(log.product_id).lean();
+    const name       = user.first_name || 'Bos';
+    const boughtName = boughtProd ? boughtProd.name : 'VIP';
+    const discPrice  = Math.floor(nextProduct.price * 0.9);
+
+    const msg =
+      `🎁 <b>${name}, hadiah spesial dari kami!</b>\n\n` +
+      `Terima kasih sudah jadi member <b>${boughtName}</b> selama seminggu.\n\n` +
+      `Sebagai bentuk apresiasi, upgrade ke <b>${nextProduct.name}</b> dengan:\n` +
+      `💰 <b>Diskon 10% — Rp${discPrice.toLocaleString('id-ID')}</b> (normal Rp${nextProduct.price.toLocaleString('id-ID')})\n` +
+      `⏳ Penawaran berlaku <b>72 jam</b> saja\n\n` +
+      `<blockquote>Member yang punya keduanya bilang koleksinya jauh lebih lengkap.</blockquote>\n\n` +
+      `👇 <b>Klaim Diskon Sekarang</b>`;
+
+    await Discount.create({
+      target_user_id: Number(user._id),
+      target_product_id: String(nextProduct._id),
+      type: 'PERCENTAGE', value: 10,
+      valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000),
+      active: true
+    });
+
+    const keyboard = buildProductMarkup(nextProduct);
+    const media    = nextProduct.promo_image_id || hFile;
+    const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
+    const result   = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_3H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    if (result.ok) {
+      await DripLog.findByIdAndUpdate(log._id, { stage: 3, converted: true, exited_reason: 'POST_PURCHASE_COMPLETE' });
+      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+      stats.stage3++;
+    } else { stats.skipped++; }
+    await delay(1500);
+  }
+
+  // ── Stage 4: Hari ke-14 — Final re-engagement + diskon 15% ──────────────────
+  const fourteenDaysAgo = new Date(now - 14 * 24 * 60 * 60 * 1000);
+  const ppStage3Done = await DripLog.find({
+    campaign_type: 'POST_PURCHASE',
+    stage: 3,
+    converted: false, // stage 3 yang belum di-cross-sell (belum beli produk lain)
+    sent_at: { $lte: fourteenDaysAgo }
+  }).lean();
+
+  for (const log of ppStage3Done) {
+    const user = await User.findById(log.user_id).lean();
+    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+
+
+    const boughtIds   = await getBoughtProductIds(user._id);
+    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
+    if (!nextProduct) {
+      await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'ALL_BOUGHT' });
+      continue;
+    }
+
+    const name        = user.first_name || 'Bos';
+    const discPrice   = Math.floor(nextProduct.price * 0.85);
+    const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+
+    const msg =
+      `🔔 <b>${name.toUpperCase()}, penawaran terakhir dari kami.</b>\n\n` +
+      `Kamu sudah 2 minggu jadi member dan kami senang kamu di sini.\n` +
+      `<b>${totalBuyers}+ member</b> sudah punya akses lengkap — kamu bisa jadi salah satunya.\n\n` +
+      `Upgrade ke <b>${nextProduct.name}</b> dengan:\n` +
+      `💰 <b>Diskon 15% — Rp${discPrice.toLocaleString('id-ID')}</b> (normal Rp${nextProduct.price.toLocaleString('id-ID')})\n` +
+      `⏳ Hanya berlaku <b>48 jam</b>\n\n` +
+      `<blockquote>Setelah ini tidak ada penawaran lagi. Harga kembali normal.</blockquote>\n\n` +
+      `👇 <b>Klaim Diskon Terakhir</b>`;
+
+    await Discount.create({
+      target_user_id: Number(user._id),
+      target_product_id: String(nextProduct._id),
+      type: 'PERCENTAGE', value: 15,
+      valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000),
+      active: true
+    });
+
+    const keyboard = buildProductMarkup(nextProduct);
+    const media    = nextProduct.promo_image_id || hFile;
+    const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
+    const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_12H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    if (result2.ok) {
+      await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
+      stats.stage4 = (stats.stage4 || 0) + 1;
+    } else { stats.skipped++; }
+    await delay(1500);
+  }
+
+  return stats;
+}
+
+
+// Dipanggil dari index.js saat fulfillOrder (onPaymentSuccess)
+async function markDripConverted(userId, amount = 0, boughtProductIds = []) {
   try {
     const logs = await DripLog.find({ user_id: userId, converted: false }).lean();
     for (const log of logs) {
@@ -778,7 +1346,225 @@ async function markDripConverted(userId, amount = 0) {
         });
       }
     }
-  } catch (e) { /* silent */ }
+
+    // [FIX TC-27] Buat POST_PURCHASE DripLog stage 1 untuk setiap produk yang dibeli
+    // Ini yang memicu runPostPurchaseFollowUp untuk kirim tips (D+3) dan cross-sell (D+7)
+    for (const prodId of boughtProductIds) {
+      const existing = await DripLog.findOne({
+        user_id: userId,
+        product_id: String(prodId),
+        campaign_type: 'POST_PURCHASE',
+        converted: false
+      }).lean();
+      if (!existing) {
+        // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
+        await DripLog.findOneAndUpdate(
+          { user_id: userId, product_id: String(prodId), campaign_type: 'POST_PURCHASE', stage: 1 },
+          { $setOnInsert: { user_id: userId, product_id: String(prodId), campaign_type: 'POST_PURCHASE', stage: 1, sent_at: new Date(), converted: false } },
+          { upsert: true }
+        );
+      }
+    }
+  } catch (e) { console.error('[DRIP] markDripConverted error:', e.message); }
+}
+
+// ─── [UPGRADE 1] CART ABANDON HYPER-RECOVERY ─────────────────────────────────
+async function runCartAbandonCampaign(bot) {
+  const stats = { sent1h: 0, sent3h: 0, sent12h: 0, skipped: 0 };
+  const now = new Date();
+
+  // [FIX ROOT CAUSE] Sebelumnya menggunakan UserEvent CHECKOUT yang tidak pernah fired.
+  // Sekarang langsung pakai DripLog CART_ABANDON stage 0 sebagai trigger —
+  // DripLog ini di-create otomatis saat order expire di handleOrderExpired().
+  const pendingCA = await DripLog.find({
+    campaign_type: 'CART_ABANDON',
+    stage: 0,           // Stage 0 = baru abandon, belum dapat pesan apapun
+    converted: false
+  }).lean();
+
+  for (const drip of pendingCA) {
+    const user = await User.findById(drip.user_id).lean();
+    if (!user || user.is_blocked) { stats.skipped++; continue; }
+    // Cart abandon BYPASS cooldown — user ini butuh direscue, bukan di-skip
+    if (isInCooldown(user) && user.purchase_count > 0) { stats.skipped++; continue; }
+
+    // Pastikan belum bayar setelah abandon terakhir
+    const lastAbandoned = await Order.findOne({ user_id: user._id, status: 'EXPIRED' }).sort({ created_at: -1 }).lean();
+    const paidAfter = lastAbandoned ? await Order.findOne({
+      user_id: user._id, status: 'SUCCESS',
+      created_at: { $gte: lastAbandoned.created_at }
+    }).lean() : null;
+    if (paidAfter) {
+      await DripLog.findByIdAndUpdate(drip._id, { converted: true, exited_reason: 'PAID_AFTER_ABANDON' });
+      continue;
+    }
+
+    const abandonCount = await Order.countDocuments({ user_id: user._id, status: 'EXPIRED' });
+    const hoursSince = lastAbandoned ? (now - new Date(lastAbandoned.created_at)) / 3600000 : 99;
+
+    // Pilih stage berdasarkan waktu sejak abandon terakhir
+    let stage = 1; // Default: Stage 1 (pesan pertama, FOMO)
+    if (hoursSince >= 12) stage = 3;
+    else if (hoursSince >= 3)  stage = 2;
+
+    const productId = drip.product_id || lastAbandoned?.product_id || null;
+    const name = user.first_name || 'Bos';
+    let msg = '';
+    let keyboard = null;
+    let discVal = 0;
+
+    const cbData = productId ? `buy_now_${productId}` : 'buy_bndl_ALL';
+
+
+    if (stage === 1) {
+      // Stage 1: FOMO + Social Proof — tunjukkan orang lain sudah masuk
+      const recentBuyers = await Order.countDocuments({
+        status: 'SUCCESS',
+        created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+      });
+      const socialProof = recentBuyers > 0
+        ? `\n\n<blockquote>Dalam 24 jam terakhir, ${recentBuyers} orang baru saja dapat aksesnya. Mereka sudah di dalam — kamu belum.</blockquote>`
+        : `\n\n<blockquote>Slot VIP masih ada, tapi tidak selalu.</blockquote>`;
+      msg = `🔑 <b>${name}, kamu hampir masuk tadi.</b>${socialProof}\n\n` +
+            `QR-nya expired, tapi akses masih bisa kamu ambil sekarang — prosesnya cuma 30 detik.\n\n` +
+            `👇 <b>Lanjutkan checkout:</b>`;
+      keyboard = Markup.inlineKeyboard([[Markup.button.callback('💳 Lanjutkan Sekarang', cbData)]]);
+
+    } else if (stage === 2) {
+      discVal = 10;
+      // Stage 2: Spesifik deadline dengan jam exact + diskon
+      const expireAt = new Date(Date.now() + 9 * 60 * 60 * 1000);
+      const expireStr = expireAt.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
+      const totalMembers = await Order.countDocuments({ status: 'SUCCESS' });
+      msg = `⏰ <b>${name}, diskon 10% berlaku sampai jam ${expireStr} malam ini.</b>\n\n` +
+            `${totalMembers}+ member sudah punya akses penuh. Kamu bisa jadi yang berikutnya hari ini.\n\n` +
+            `<blockquote>Diskon ini dibuat khusus buat kamu — tidak akan muncul lagi setelah jam ${expireStr}.</blockquote>\n\n` +
+            `👇 <b>Ambil sebelum expired:</b>`;
+      keyboard = Markup.inlineKeyboard([[Markup.button.callback(`🔥 Pakai Diskon 10% (s/d ${expireStr})`, cbData)]]);
+
+    } else if (stage === 3) {
+      discVal = 15;
+      // Stage 3: Loss aversion — apa yang konkret mereka lewatkan
+      const weeklyContent = await Order.countDocuments({
+        status: 'SUCCESS',
+        created_at: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+      });
+      const totalMembers = await Order.countDocuments({ status: 'SUCCESS' });
+      msg = `🚨 <b>${name.toUpperCase()}, ini kesempatan terakhir.</b>\n\n` +
+            `Minggu ini ada ${weeklyContent} member baru masuk dan langsung dapat akses koleksi terbaru.\n` +
+            `Total ${totalMembers}+ orang sudah di dalam. Kamu masih di luar.\n\n` +
+            `<b>Diskon 15%</b> — diskon terbesar yang pernah kami kasih — hangus tengah malam ini.\n` +
+            `Tidak ada diskon lagi setelah ini.\n\n` +
+            `<blockquote>Sekali masuk, akses selamanya. Tidak ada biaya bulanan.</blockquote>\n\n` +
+            `👇 <b>Ambil sekarang atau tidak sama sekali:</b>`;
+      keyboard = Markup.inlineKeyboard([[Markup.button.callback(`⚡ Klaim 15% OFF — Terakhir`, cbData)]]);
+    }
+
+    if (discVal > 0) {
+      await Discount.create({
+        target_user_id: Number(user._id),
+        target_product_id: productId && productId !== 'BUNDLE' ? String(productId) : null,
+        type: 'PERCENTAGE',
+        value: discVal,
+        valid_until: new Date(Date.now() + 12 * 60 * 60 * 1000),
+        active: true
+      });
+    }
+
+    const hType = await getSetting('header_type', 'url');
+    const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+    
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'FLASH_SALE', userName: user.first_name || '?', reason: 'flash_sale_trigger' });
+    if (result.ok) {
+      // Update DripLog stage 0 → stage yang dikirim (bukan buat baru, cegah duplikat)
+      await DripLog.findByIdAndUpdate(drip._id, {
+        stage: stage,
+        sent_at: new Date()
+      });
+      if (stage === 1) stats.sent1h++;
+      if (stage === 2) stats.sent3h++;
+      if (stage === 3) stats.sent12h++;
+      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+    } else {
+      stats.skipped++;
+    }
+    await delay(1500);
+  }
+  return stats;
+}
+
+// ─── [UPGRADE 2] FLASH SALE OTOMATIS (MINGGU MALAM) ────────────────────────────
+async function runFlashSaleCampaign(bot, allProducts) {
+  const stats = { sent: 0, skipped: 0 };
+  const now = new Date();
+  
+  if (now.getDay() !== 0 || now.getHours() < 20) return stats;
+
+  const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const progressKey = `FLASHSALE-${dateStr}`;
+  const progress = await CronProgress.findOne({ date: progressKey }).lean();
+  if (progress) return stats; 
+
+  const users = await User.find({
+    is_blocked: { $ne: true },
+    $or: [
+      { purchase_count: { $in: [0, null] } },
+      { last_active_at: { $lt: new Date(now - 30 * 24 * 60 * 60 * 1000) } }
+    ]
+  }).lean();
+
+  if (users.length === 0) return stats;
+
+  // Create global flash sale discount
+  await Discount.create({
+    target_user_id: null,
+    target_product_id: null,
+    type: 'PERCENTAGE',
+    value: 20, 
+    valid_until: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59),
+    active: true,
+    max_uses: 20, // Hanya untuk 20 orang pertama
+    used_count: 0
+  });
+
+  // Flash Sale message — DNA J-SUB: subtitle + koleksi berkembang
+  const totalBuyersFS = await User.countDocuments({ purchase_count: { $gt: 0 } }).catch(() => 0);
+  const msg = `⚡ <b>FLASH SALE MALAM INI — 4 JAM SAJA</b>\n\n` +
+              `Belum ada subtitle Indonesia untuk judul favorit kamu?\n` +
+              `<b>Tim J-SUB yang kerjakan sendiri.</b>\n\n` +
+              `Malam ini harga turun 20% — hanya untuk 20 pembeli pertama.\n` +
+              `Sudah <b>${totalBuyersFS}+ member</b> yang akses koleksi subtitle eksklusif J-SUB.\n\n` +
+              `Harga berlaku sampai jam 24:00:\n` +
+              `• VIP JAV SUB INDO  : <s>Rp60.000</s> → <b>Rp48.000</b>\n` +
+              `• VIP INDO VIRAL    : <s>Rp50.000</s> → <b>Rp40.000</b>\n` +
+              `• VIP OME TV &amp; VCS  : <s>Rp50.000</s> → <b>Rp40.000</b>\n` +
+              `• BUNDLE SEMUA      : <s>Rp410.000</s> → <b>Diskon 20%</b>\n\n` +
+              `<blockquote>Semakin lama proyek berjalan, semakin banyak subtitle yang dikerjakan. Nilai membership terus bertambah. Harga opening tidak selamanya berlaku.</blockquote>\n\n` +
+              `👇 <b>Ambil Slot Flash Sale Kamu:</b>`;
+  const buttons = [
+    [Markup.button.callback('🎁 BELI BUNDLE (Semua VIP)', 'buy_bndl_ALL')]
+  ];
+  for (const p of allProducts) {
+    buttons.push([Markup.button.callback(`🔥 Beli ${p.name}`, `buy_now_${p._id}`)]);
+  }
+  const keyboard = Markup.inlineKeyboard(buttons);
+
+  const hType = await getSetting('header_type', 'url');
+  const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+
+  await CronProgress.create({ date: progressKey, campaign: 'COMPLETED', completed: true, created_at: new Date() });
+
+  for (const user of users) {
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'VIP_WINBACK', userName: user.first_name || '?', reason: 'winback' });
+    if (result.ok) {
+      stats.sent++;
+      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+    } else {
+      stats.skipped++;
+    }
+    await delay(1500);
+  }
+  return stats;
 }
 
 // ─── CAMPAIGN UTAMA ──────────────────────────────────────────────────────────
@@ -788,8 +1574,29 @@ async function runMarketingCampaign(bot, todayStr) {
     return { skipped: true, reason: 'Marketing dimatikan Admin' };
   }
 
-  let progress = await CronProgress.findOne({ date: todayStr });
-  if (!progress) progress = await CronProgress.create({ date: todayStr, campaign: 'START' });
+  // [FIX SPAM] Reset per-run Set agar tracking hanya berlaku dalam 1 run ini
+  sentInThisRun.clear();
+
+  // [FIX #3] Cleanup diskon expired — jalan tiap jam, bukan hanya jam 03:00
+  try {
+    const cleanedDisc = await Discount.updateMany(
+      { active: true, valid_until: { $lt: new Date() } },
+      { $set: { active: false } }
+    );
+    if (cleanedDisc.modifiedCount > 0)
+      console.log(`[CLEANUP] ✅ ${cleanedDisc.modifiedCount} diskon expired dinonaktifkan.`);
+  } catch (e) { console.error('[CLEANUP] Gagal cleanup diskon:', e.message); }
+
+  // [BUGFIX W5] Gunakan date-only key (bukan jam) agar completed state survive seluruh hari
+  // Sebelumnya: key per jam "2026-08-14-09" → setiap jam buat record baru → completed tidak pernah tersimpan
+  // Sekarang: key per hari "2026-08-14" → state persist sampai tengah malam
+  const jakartaDate = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Jakarta'}));
+  const dateOnlyStr = todayStr || `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}`;
+  let progress = await CronProgress.findOneAndUpdate(
+    { date: dateOnlyStr },
+    { $setOnInsert: { date: dateOnlyStr, campaign: 'START', completed: false, created_at: new Date() } },
+    { upsert: true, returnDocument: 'after' }
+  );
 
   // Upgrade 3: Peak Hours berdasarkan DATA REAL - jam pembayaran terbanyak
   // Data: Jam 17 (7 bayar), 21 (3 bayar), 23 (2 bayar), 01 (3 bayar), 07 (3 bayar)
@@ -805,10 +1612,33 @@ async function runMarketingCampaign(bot, todayStr) {
   let nonBuyerStats = { cold: 0, abandon: 0, inactive: 0, skipped: 0, failed: 0 };
   let vipCount = 0;
   let crossSellStats = { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
+  let cartAbandonStats = { sent1h: 0, sent3h: 0, sent12h: 0, skipped: 0 };
+  let flashSaleStats = { sent: 0, skipped: 0 };
+
+  // Jika sudah COMPLETED hari ini — skip, jangan kirim dobel
+  if (progress.campaign === 'COMPLETED' && progress.completed === true) {
+    const hourNow = jakartaDate.getHours();
+    // Reset di tengah malam (jam 0) untuk hari baru
+    if (hourNow === 0) {
+      await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'START', completed: false });
+      progress.campaign = 'START';
+    } else {
+      // Sudah selesai hari ini — Drip tetap jalan tiap jam, campaign utama skip
+      console.log('[CRON] Campaign utama sudah selesai hari ini. Hanya menjalankan Drip Follow-Up...');
+      await runDripFollowUp(bot);
+      await runPostPurchaseFollowUp(bot); // [W9] Post-purchase jalan tiap jam
+      await runCartAbandonCampaign(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam
+      return { skipped: false, drip_only: true };
+    }
+  }
 
   if (progress.campaign === 'START') {
     console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
     dripStats = await runDripFollowUp(bot);
+    console.log('[MARKETING] Campaign 4: Post-Purchase Follow-Up...');
+    await runPostPurchaseFollowUp(bot); // [W9] Tips hari ke-3 + cross-sell hari ke-7
+    console.log('[MARKETING] Campaign 5: Cart Abandon Hyper-Recovery...');
+    cartAbandonStats = await runCartAbandonCampaign(bot); // [UPGRADE 1]
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'DRIP_DONE' });
     progress.campaign = 'DRIP_DONE';
   }
@@ -824,17 +1654,22 @@ async function runMarketingCampaign(bot, todayStr) {
     }
   }
 
-  if (progress.campaign === 'NON_BUYER_DONE' && isPeakHour) {
+  // [FIX] VIP Win-back dan Cross-sell TIDAK perlu isPeakHour — seharusnya jalan tiap jam
+  // Sebelumnya: hanya jalan 7 jam/hari (peak hours) → success rate cuma 38%
+  // Sekarang: jalan tiap jam, tapi isHighConversionDay memberi boost prioritas
+  if (progress.campaign === 'NON_BUYER_DONE') {
     console.log('[MARKETING] Campaign VIP Win-Back...');
     vipCount = await runVIPWinBackCampaign(bot);
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'VIP_DONE' });
     progress.campaign = 'VIP_DONE';
   }
 
-  if (progress.campaign === 'VIP_DONE' && isPeakHour) {
+  if (progress.campaign === 'VIP_DONE') {
     const allProducts = await Product.find({ active: 1 }).lean();
     console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
     crossSellStats = await runCrossSellCampaign(bot, allProducts);
+    console.log('[MARKETING] Campaign 6: Flash Sale (Minggu Malam)...');
+    flashSaleStats = await runFlashSaleCampaign(bot, allProducts); // [UPGRADE 2]
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'COMPLETED', completed: true });
   }
 
@@ -848,12 +1683,16 @@ async function runMarketingCampaign(bot, todayStr) {
     stage3: dripStats.stage3,
     stage4: dripStats.stage4,
     vipWinBack: vipCount,
-    skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped,
+    cartAbandon1h: cartAbandonStats.sent1h,
+    cartAbandon3h: cartAbandonStats.sent3h,
+    cartAbandon12h: cartAbandonStats.sent12h,
+    flashSaleSent: flashSaleStats.sent,
+    skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped + cartAbandonStats.skipped + flashSaleStats.skipped,
     failed: nonBuyerStats.failed + crossSellStats.failed + dripStats.failed
   };
 
-  // Bersihkan user yang sudah nge-block (Auto-cleanup Upgrade 5)
-  try { await User.deleteMany({ is_blocked: true, purchase_count: { $in: [0, null] } }); } catch(e){}
+  // [REMOVED] User.deleteMany dihapus — berbahaya, menghapus user permanen dari DB
+  // Blocked user cukup di-skip saat campaign, tidak perlu dihapus
 
   return combined;
 }
@@ -920,19 +1759,28 @@ async function cleanupConvertedDripLogs() {
 async function runVIPWinBackCampaign(bot) {
   let count = 0;
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
-  
+  const ninetyDaysAgo   = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // [FIX W10] diperlebar dari 60 → 90 hari
+
+  // [FIX W10] Perlebar criteria:
+  // Sebelumnya: total_spent>100k ATAU purchase_count>=5 (terlalu ketat → 9 dormant buyer tidak terjangkau)
+  // Sekarang: semua buyer (purchase_count>=1) yang tidak aktif 14-90 hari
   const vips = await User.find({
-    $or: [{ total_spent: { $gt: 100000 } }, { purchase_count: { $gte: 5 } }],
-    last_active_at: { $lte: fourteenDaysAgo, $gte: sixtyDaysAgo },
+    purchase_count: { $gte: 1 },
+    last_active_at: { $lte: fourteenDaysAgo, $gte: ninetyDaysAgo },
     is_blocked: { $ne: true }
   }).lean();
 
   for (const user of vips) {
     if (isInCooldown(user)) continue;
     
-    const msg = `\u{1F44B} *Halo ${user.first_name || 'VIP'}!*\n\nLama tak jumpa. Kami di sini sangat merindukan kehadiran Anda.\n\nJika Anda butuh sesuatu atau ada kendala, jangan ragu untuk membalas pesan ini langsung.\n\nSemoga hari Anda menyenangkan!`;
-    const result = await sendSafe(bot, user._id, msg);
+    // [FIX] Ganti Markdown (*bold*) ke HTML (<b>bold</b>) — sendSafe pakai parse_mode HTML
+    const msg =
+      `👋 <b>Halo ${user.first_name || 'VIP'}!</b>\n\n` +
+      `Lama tak jumpa. Kami sangat menghargai kepercayaan kamu selama ini.\n\n` +
+      `Ada konten baru yang mungkin kamu suka — boleh cek dulu katalog terbaru kami?\n\n` +
+      `<blockquote>Sebagai member setia, kamu bisa request konten spesial langsung ke admin.</blockquote>\n\n` +
+      `💬 Balas pesan ini kalau ada yang bisa kami bantu!`;
+    const result = await sendSafe(bot, user._id, msg, { campaign: 'BROADCAST_MANUAL', userName: user.first_name || '?' });
     if (result.ok) count++;
     await delay(1500);
   }
@@ -984,17 +1832,13 @@ function startCron(bot) {
   const marketingTask = cron.schedule('0 * * * *', async () => {
     if (!marketingEnabled) return;
     const now = new Date();
-    // Format: "2026-07-27" — daily key agar campaign berjalan tuntas dalam 1 hari
+    // Format: "2026-07-27-17" — hourly key agar tiap jam bisa kirim drip sesuai timing
     const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
-    const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}`;
+    const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}-${String(jakartaDate.getHours()).padStart(2,'0')}`;
     console.log(`[CRON] ⏰ Menjalankan Marketing Automations (${now.toISOString()})...`);
     try {
       const stats = await runMarketingCampaign(bot, todayHourStr);
-      if (stats.skipped) {
-        console.log('[CRON] Marketing diskip:', stats.reason);
-      } else {
-        console.log('[CRON] ✅ Marketing selesai. Stats:', JSON.stringify(stats));
-      }
+      console.log('[CRON] ✅ Marketing selesai. Stats:', JSON.stringify(stats));
     } catch (err) {
       console.error('[CRON] ❌ Gagal menjalankan marketing:', err.message);
     }
@@ -1089,7 +1933,17 @@ function startCron(bot) {
           `<b>Produk yang bisa kamu ambil sekarang:</b>\n${productLines}\n\n` +
           `➟ Klik tombol di bawah <b>sebelum hangus!</b>`;
 
-        await sendSafe(bot, disc.target_user_id, reminderMsg, { media: hFile, mediaType: hType, keyboard });
+        const firstUnbought = unboughtProducts[0];
+        const remMediaArr = firstUnbought?.promo_media?.length > 1 ? firstUnbought.promo_media : null;
+        const reminderPromoImg = firstUnbought?.promo_image_id || hFile;
+        const reminderPromoType = firstUnbought?.promo_image_id ? (firstUnbought.promo_media_type || 'photo') : hType;
+        const remSendOpts = remMediaArr
+          ? { mediaGroup: remMediaArr, keyboard }
+          : { media: reminderPromoImg, mediaType: reminderPromoType, keyboard };
+
+        await sendSafe(bot, disc.target_user_id, reminderMsg, remSendOpts);
+
+
         await delay(1500);
       }
 
