@@ -2684,7 +2684,15 @@ async function resumePendingOrders() {
 }
 
 if (process.env.NODE_ENV !== "test") {
-  // startSaweriaSSE(bot, onPaymentSuccess); // Dinonaktifkan karena sudah pindah ke Webhook
+  // [FIX KRITIS] Aktifkan Saweria WebSocket SSE — satu-satunya cara deteksi payment
+  // karena: (1) polling /donations/qris/snap/* return 403 dari Cloudflare
+  //         (2) tidak ada PUBLIC_URL untuk webhook
+  if (process.env.SAWERIA_STREAM_KEY) {
+    startSaweriaSSE(bot, onPaymentSuccess);
+    logger.success('[SSE] Saweria WebSocket diaktifkan — payment detection REAL-TIME');
+  } else {
+    logger.warn('[SSE] SAWERIA_STREAM_KEY kosong — payment detection TIDAK AKTIF! Semua payment akan expired!');
+  }
   scheduler.startCron(bot);
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
