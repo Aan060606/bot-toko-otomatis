@@ -2684,15 +2684,68 @@ async function resumePendingOrders() {
 }
 
 if (process.env.NODE_ENV !== "test") {
-  // [FIX KRITIS] Aktifkan Saweria WebSocket SSE — satu-satunya cara deteksi payment
-  // karena: (1) polling /donations/qris/snap/* return 403 dari Cloudflare
-  //         (2) tidak ada PUBLIC_URL untuk webhook
-  if (process.env.SAWERIA_STREAM_KEY) {
-    startSaweriaSSE(bot, onPaymentSuccess);
-    logger.success('[SSE] Saweria WebSocket diaktifkan — payment detection REAL-TIME');
-  } else {
-    logger.warn('[SSE] SAWERIA_STREAM_KEY kosong — payment detection TIDAK AKTIF! Semua payment akan expired!');
-  }
+  // [FIX KRITIS] Payment Detection via Cloudflare Tunnel + Webhook
+  // - Polling API Saweria → 403 (IP VPS diblokir Cloudflare)
+  // - WebSocket SSE Saweria → 403 (IP VPS diblokir Cloudflare)
+  // - Webhook via cloudflared tunnel → ✅ BEKERJA
+  // Bot otomatis jalankan cloudflared, kirim URL ke admin Telegram
+  (async () => {
+    try {
+      const { spawn } = require('child_process');
+      const cfPath = '/usr/local/bin/cloudflared';
+      const fs = require('fs');
+
+      if (!fs.existsSync(cfPath)) {
+        logger.warn('[CF-TUNNEL] cloudflared tidak ditemukan. Webhook detection TIDAK AKTIF.');
+        return;
+      }
+
+      logger.info('[CF-TUNNEL] Memulai Cloudflare Tunnel untuk webhook payment...');
+      const cf = spawn(cfPath, ['tunnel', '--url', 'http://localhost:3000', '--no-autoupdate'], {
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      let tunnelUrl = null;
+      const handleOutput = async (data) => {
+        const text = data.toString();
+        const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+        if (match && !tunnelUrl) {
+          tunnelUrl = match[0];
+          const webhookUrl = tunnelUrl + '/webhook';
+          logger.success('[CF-TUNNEL] ✅ Tunnel aktif! Webhook URL: ' + webhookUrl);
+          // Simpan ke file agar bisa dibaca ulang
+          fs.writeFileSync('/tmp/webhook_url.txt', webhookUrl);
+          // Kirim notif ke admin
+          if (ADMIN_CHAT_ID) {
+            await bot.telegram.sendMessage(ADMIN_CHAT_ID,
+              `🔗 <b>Webhook Payment URL Baru:</b>\n\n<code>${webhookUrl}</code>\n\n` +
+              `📋 <b>Langkah:</b>\n1. Buka <a href="https://saweria.co/dashboard">saweria.co/dashboard</a>\n` +
+              `2. Cari <b>Alert Settings</b> / <b>Notification URL</b>\n` +
+              `3. Paste URL di atas → Save\n\n` +
+              `⚠️ <i>URL ini berubah setiap bot restart. Perlu diupdate di Saweria setelah restart.</i>`,
+              { parse_mode: 'HTML', disable_web_page_preview: true }
+            ).catch(() => {});
+          }
+        }
+      };
+
+      cf.stdout.on('data', handleOutput);
+      cf.stderr.on('data', handleOutput);
+      cf.on('exit', (code) => {
+        logger.warn('[CF-TUNNEL] Tunnel mati (code=' + code + '). Payment detection MATI hingga bot restart.');
+        tunnelUrl = null;
+      });
+
+      // Timeout 30 detik — kalau URL belum muncul, log warning
+      setTimeout(() => {
+        if (!tunnelUrl) logger.warn('[CF-TUNNEL] Timeout — URL tunnel belum muncul. Cek log cloudflared.');
+      }, 30000);
+
+    } catch (err) {
+      logger.warn('[CF-TUNNEL] Gagal start tunnel: ' + err.message);
+    }
+  })();
+
   scheduler.startCron(bot);
   bot.launch({ dropPendingUpdates: true })
     .then(() => {
@@ -2719,12 +2772,36 @@ if (process.env.NODE_ENV !== "test") {
       req.on("end", async () => {
         try {
           const payload = JSON.parse(body);
-          console.log("[WEBHOOK] Raw Payload:", body);
+          console.log("[WEBHOOK] Raw Payload:", body.substring(0, 300));
           
           let items = [];
+          
+          // Format 1: Saweria standard JSON {data: [...]}
           if (payload.data && Array.isArray(payload.data)) items = payload.data;
           else if (payload.data) items = [payload.data];
-          else items = [payload]; // Kadang payload langsung di root
+          // Format 2: Discord Embed format (dari halaman Discord Saweria)
+          // Saweria kirim: {embeds: [{fields: [{name: "Dari", value: "..."}, {name: "Pesan", value: "..."}, ...]}]}
+          else if (payload.embeds && Array.isArray(payload.embeds)) {
+            for (const embed of payload.embeds) {
+              const fields = embed.fields || [];
+              const item = {};
+              // Ambil data dari embed description atau fields
+              const desc = embed.description || '';
+              const amtMatch = desc.match(/Rp[\s]*([\d.,]+)/i) || desc.match(/([\d.,]+)/);
+              if (amtMatch) item.amount = parseInt(amtMatch[1].replace(/[.,]/g, ''));
+              for (const f of fields) {
+                const key = (f.name || '').toLowerCase();
+                const val = (f.value || '').replace(/\*\*/g, '').trim();
+                if (key.includes('dari') || key.includes('from') || key.includes('donator')) item.donator = val;
+                else if (key.includes('pesan') || key.includes('message') || key.includes('msg')) item.message = val;
+                else if (key.includes('jumlah') || key.includes('amount') || key.includes('nominal')) item.amount = parseInt(val.replace(/[^0-9]/g,''));
+              }
+              if (!item.message && desc) item.message = desc;
+              if (Object.keys(item).length > 0) items.push(item);
+            }
+          }
+          // Format 3: Root object langsung
+          else items = [payload];
 
           if (items.length > 0) {
             for (const item of items) {
