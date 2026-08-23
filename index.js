@@ -2823,16 +2823,35 @@ if (process.env.NODE_ENV !== "test") {
                 const userId = parseInt(match[1]);
                 console.log(`[WEBHOOK] UID Terdeteksi: ${userId}`);
                 
-                // [BUGFIX] Cocokkan donation_id agar webhook lama tidak picu order baru yang salah
+                // [FIX] Cocokkan donation_id — atau fallback by user_id+amount kalau tidak ada id
+                // (Format embed Discord Saweria tidak kirim donation_id di payload)
                 const donationIdFromWebhook = item.id || item.donation_id || null;
                 let order = null;
                 if (donationIdFromWebhook) {
                   order = await Order.findOne({ user_id: userId, donation_id: donationIdFromWebhook, status: 'PENDING' });
                 }
-                // [BUGFIX] HANYA match by donation_id - tidak ada fallback ke latest PENDING
-                // Fallback berbahaya: bisa fulfill order lain secara tidak sengaja
+                // Fallback aman: match by user_id + amount tolerance (hanya jika tidak ada donation_id)
+                // Aman karena: hanya 1 PENDING per user dalam waktu bersamaan
+                if (!order && !donationIdFromWebhook && !isNaN(amount) && amount > 0) {
+                  const recentOrder = await Order.findOne({
+                    user_id: userId,
+                    status: 'PENDING',
+                    created_at: { $gte: new Date(Date.now() - 20 * 60 * 1000) } // max 20 menit lalu
+                  }).sort({ created_at: -1 });
+                  if (recentOrder) {
+                    const TOLERANCE_PCT = Math.ceil(recentOrder.total_amount * 0.10); // 10% toleransi
+                    const amountWithFee = Math.ceil(amount * 1.04 / 500) * 500;
+                    if (Math.abs(amountWithFee - recentOrder.total_amount) <= TOLERANCE_PCT) {
+                      order = recentOrder;
+                      console.log(`[WEBHOOK] Fallback match by user+amount: order ${order._id} (${order.total_amount} ≈ ${amountWithFee})`);
+                    }
+                  }
+                }
                 if (!order && donationIdFromWebhook) {
-                  logger.warn(`[WEBHOOK] donation_id ${donationIdFromWebhook} tidak cocok dengan order PENDING manapun. Abaikan.`);
+                  logger.warn(`[WEBHOOK] donation_id ${donationIdFromWebhook} tidak cocok. Abaikan.`);
+                }
+                if (!order && !donationIdFromWebhook) {
+                  console.log(`[WEBHOOK] Tidak ada order PENDING untuk UID ${userId}. Mungkin sudah diproses.`);
                 }
                 
                 if (order) {
