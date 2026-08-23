@@ -2785,10 +2785,16 @@ if (process.env.NODE_ENV !== "test") {
             for (const embed of payload.embeds) {
               const fields = embed.fields || [];
               const item = {};
-              // Ambil data dari embed description atau fields
+              // Ambil data dari embed TITLE dulu (format Saweria: "Yay kamu dapet 69.420 dari Someguy")
+              const title = embed.title || '';
+              const titleAmtMatch = title.match(/([\d.,]+)/);
+              const titleDonatorMatch = title.match(/dari\s+(.+)$/i);
+              if (titleAmtMatch) item.amount = parseInt(titleAmtMatch[1].replace(/[.,]/g, ''));
+              if (titleDonatorMatch) item.donator = titleDonatorMatch[1].trim();
+              // Ambil data dari embed description
               const desc = embed.description || '';
-              const amtMatch = desc.match(/Rp[\s]*([\d.,]+)/i) || desc.match(/([\d.,]+)/);
-              if (amtMatch) item.amount = parseInt(amtMatch[1].replace(/[.,]/g, ''));
+              const descAmtMatch = desc.match(/Rp[\s]*([\d.,]+)/i);
+              if (descAmtMatch && !item.amount) item.amount = parseInt(descAmtMatch[1].replace(/[.,]/g, ''));
               for (const f of fields) {
                 const key = (f.name || '').toLowerCase();
                 const val = (f.value || '').replace(/\*\*/g, '').trim();
@@ -2798,6 +2804,7 @@ if (process.env.NODE_ENV !== "test") {
               }
               if (!item.message && desc) item.message = desc;
               if (Object.keys(item).length > 0) items.push(item);
+
             }
           }
           // Format 3: Root object langsung
