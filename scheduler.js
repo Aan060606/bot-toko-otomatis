@@ -945,6 +945,20 @@ async function runDripFollowUp(bot) {
         }
       }
 
+      // [FIX E11000] Cek apakah sudah ada DripLog Stage 2+ untuk user+produk+campaign ini
+      // Jika ada (data lama dari bulan sebelumnya) → skip, tandai converted
+      const alreadyStage2 = await DripLog.findOne({
+        user_id: log.user_id,
+        product_id: String(log.product_id),
+        campaign_type: log.campaign_type,
+        stage: { $gte: 2 }
+      }).lean();
+      if (alreadyStage2) {
+        await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'ALREADY_ADVANCED' });
+        stats.skipped++;
+        continue;
+      }
+
       const product = await Product.findById(log.product_id).lean();
       const { file: mediaFile, type: mediaType } = getProductMedia(product);
       const hook = getProductHook(product, 2);
@@ -970,7 +984,7 @@ async function runDripFollowUp(bot) {
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product);
 
-      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D3', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
+      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S2', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
         stats.stage2++;
@@ -980,7 +994,13 @@ async function runDripFollowUp(bot) {
       }
       await delay(1500);
     } catch (err) {
-      console.error(`[DRIP] Error Stage 2 user ${log.user_id}:`, err);
+      // [FIX E11000] Jika error duplikat key — anggap sudah terkirim, skip saja
+      if (err.code === 11000) {
+        console.log(`[DRIP] Stage 2 skip (sudah ada): user ${log.user_id}`);
+        try { await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'ALREADY_ADVANCED' }); } catch(_){}
+      } else {
+        console.error(`[DRIP] Error Stage 2 user ${log.user_id}:`, err.message);
+      }
       continue;
     }
   }
@@ -1040,7 +1060,7 @@ async function runDripFollowUp(bot) {
       let keyboard = null;
       if (product) keyboard = buildProductMarkup(product, discountAmount);
 
-      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D7', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
+      const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S3', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
         await Discount.create({
@@ -1101,7 +1121,7 @@ async function runDripFollowUp(bot) {
         `👇 <b>Ini Kesempatan Terakhir Saya</b>`;
 
       const keyboard = buildProductMarkup(product, discountAmount);
-      const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'POST_PURCHASE_D30', userName: user.first_name || '?', reason: dripLog?.product_id || '-' });
+      const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S4', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
         await Discount.create({
