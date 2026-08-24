@@ -248,9 +248,10 @@ function isInCooldown(user, { bypassForBuyer = false } = {}) {
   if (bypassForBuyer && user.purchase_count > 0) return false; // [FIX] Buyer bypass cooldown untuk POST_PURCHASE
   // [FIX SPAM] Cek in-memory Set dulu — kalau sudah dikirim di run ini, skip
   if (sentInThisRun.has(String(user._id))) return true;
-  if (!user.last_broadcast_at) return false;
-  const hoursSinceLast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60 * 60);
-  return hoursSinceLast < 24; // 24 jam = max 1 pesan marketing per hari
+  
+  // Dihapus: 24-hour global block. User boleh dapat >1 pesan marketing per hari
+  // jika pesannya dari funnel/produk yang BERBEDA.
+  return false;
 }
 
 

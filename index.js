@@ -380,15 +380,11 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
             }
           }
 
-          // Cari non-buyer aktif yang BELUM MENDAPATKAN pesan marketing dalam 24 jam terakhir (Anti-Spam)
+          // Cari non-buyer aktif (tanpa batas 1x per hari, karena tiap produk beda-beda promonya)
           const recentNonBuyers = await User.find({
             purchase_count: { $in: [0, null] },
             is_blocked: { $ne: true },
             last_active_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-            $or: [
-              { last_broadcast_at: null },
-              { last_broadcast_at: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
-            ],
             _id: { $ne: chatId } // Jangan kirim ke pembeli itu sendiri
           }).sort({ last_active_at: -1 }).limit(5).lean();
 
