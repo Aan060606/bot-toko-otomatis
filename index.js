@@ -403,7 +403,9 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
               try {
                 if (mediaProd && mediaProd.promo_image_id) {
                   const mediaType = mediaProd.promo_media_type || 'photo';
-                  if (mediaType === 'video' || mediaType === 'animation') {
+                  if (mediaType === 'animation') {
+                    await ctx.telegram.sendAnimation(nb._id, mediaProd.promo_image_id, { caption: msg, parse_mode: 'HTML', ...keyboard });
+                  } else if (mediaType === 'video') {
                     await ctx.telegram.sendVideo(nb._id, mediaProd.promo_image_id, { caption: msg, parse_mode: 'HTML', ...keyboard });
                   } else {
                     await ctx.telegram.sendPhoto(nb._id, mediaProd.promo_image_id, { caption: msg, parse_mode: 'HTML', ...keyboard });
