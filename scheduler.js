@@ -872,9 +872,25 @@ async function runDripFollowUp(bot) {
   // ─── HELPER: Ambil media header per produk ─────────────────────────────
   // Jika produk punya promo_image_id sendiri → pakai itu (lebih menarik, sesuai produk)
   // Jika tidak → fallback ke header global
-  function getProductMedia(product) {
+  // Cache produk dengan media untuk fallback
+  let _mediaFallbackCache = null;
+  async function getProductMediaFallback() {
+    if (_mediaFallbackCache) return _mediaFallbackCache;
+    const prodsWithMedia = await Product.find({ active: 1, promo_image_id: { $exists: true, $ne: null, $ne: '' } }).lean();
+    _mediaFallbackCache = prodsWithMedia;
+    return prodsWithMedia;
+  }
+
+  async function getProductMedia(product) {
     if (product && product.promo_image_id) {
       return { file: product.promo_image_id, type: product.promo_media_type || 'photo' };
+    }
+    // Fallback: cari produk lain yang punya media (lebih baik dari GIF Giphy yang expired)
+    const fallbacks = await getProductMediaFallback();
+    if (fallbacks.length > 0) {
+      // Pilih secara acak dari produk yang ada media agar variasi
+      const pick = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+      return { file: pick.promo_image_id, type: pick.promo_media_type || 'photo' };
     }
     return { file: hFile, type: hType };
   }
@@ -960,21 +976,29 @@ async function runDripFollowUp(bot) {
       }
 
       const product = await Product.findById(log.product_id).lean();
-      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const { file: mediaFile, type: mediaType } = await getProductMedia(product);
       const hook = getProductHook(product, 2);
       const name = user.first_name || 'Bos';
       const productName = product ? product.name : 'Channel VIP';
 
       // Total buyers — social proof angka nyata
       const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+      // Rotasi 3 template (A/B/C) agar tidak timpang
+      const variant3 = log.variant === 'B' ? 'B' : (Math.random() < 0.5 ? 'A' : 'C');
 
-      const msg = log.variant === 'B'
+      const msg = variant3 === 'B'
         ? `👀 <b>${name}, satu hal yang bikin penasaran...</b>\n\n` +
           `${hook}\n\n` +
           `Sudah <b>${totalBuyers}+ member</b> yang gabung bulan ini.\n` +
           `Mereka yang masuk duluan dapat harga terbaik.\n\n` +
           `<blockquote>Harga masih opening — belum naik. Tapi tidak akan selamanya.</blockquote>\n\n` +
           `👇 <b>Lihat Apa yang Kamu Lewatkan</b>`
+        : variant3 === 'C'
+        ? `🔥 <b>${name}, ini yang lagi rame sekarang...</b>\n\n` +
+          `${hook}\n\n` +
+          `<b>${Math.floor(totalBuyers * 0.15)}+ orang</b> buka ${productName} hari ini.\n\n` +
+          `<blockquote>Konten baru terus masuk — member yang sudah di dalam terus nambah koleksi.</blockquote>\n\n` +
+          `👇 <b>Gabung Sebelum Harga Naik</b>`
         : `📌 <b>${name}, update dari ${productName}:</b>\n\n` +
           `${hook}\n\n` +
           `Minggu ini saja sudah ada <b>${Math.floor(totalBuyers * 0.3)}+ member baru</b> yang masuk.\n\n` +
@@ -1035,7 +1059,7 @@ async function runDripFollowUp(bot) {
       const discountRule = await calculateDynamicDiscount(user, product ? product.price : 0);
       const discountAmount = product ? Math.floor(product.price * (discountRule.percentage / 100)) : 0;
       const finalPrice = product ? product.price - discountAmount : 0;
-      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const { file: mediaFile, type: mediaType } = await getProductMedia(product);
       const hook = getProductHook(product, 3);
       const name = user.first_name || 'Bos';
 
@@ -1104,7 +1128,7 @@ async function runDripFollowUp(bot) {
          continue;
       }
 
-      const { file: mediaFile, type: mediaType } = getProductMedia(product);
+      const { file: mediaFile, type: mediaType } = await getProductMedia(product);
       const stage4DiscPct = product.price < 100000 ? 15 : 30;
       const discountAmount = Math.floor(product.price * (stage4DiscPct / 100));
       const finalPrice = product.price - discountAmount;
