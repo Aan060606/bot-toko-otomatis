@@ -301,6 +301,37 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     });
     deliveryText += `<i>Simpan link ini baik-baik. Akses permanen — sekali bayar selamanya.</i>`;
 
+    // [FIX KRITIS] Update User CRM Stats DULU sebelum kirim pesan
+    // Jika stats di-update setelah sendMessage dan sendMessage throw error,
+    // stats tidak akan terupdate (bubble ke outer catch). Pisahkan agar selalu jalan.
+    try {
+      const order = await Order.findById(orderId).lean();
+      if (order) {
+        await User.findByIdAndUpdate(chatId, {
+          $inc: { purchase_count: 1, total_spent: order.total_amount }
+        });
+        await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
+        if (order.discount_id) {
+          const { Discount } = require('./database');
+          await Discount.findByIdAndUpdate(order.discount_id, { $inc: { used_count: 1 } });
+        }
+      }
+    } catch (statsErr) {
+      logger.error('[PAYMENT] Gagal update user stats:', statsErr.message);
+    }
+
+    // Log payment
+    const buyerName = (await User.findById(chatId).lean())?.first_name || 'Unknown';
+    const order2 = await Order.findById(orderId).lean();
+    const finalAmount = order2?.total_amount || updatedOrder.total_amount || 0;
+    logger.payment.success(orderId, chatId, finalAmount, 'poll');
+    logger.payment.delivered(orderId, chatId, deliveries.length);
+    if (buyerName !== 'Unknown') {
+      const prodNames = deliveries.map(d => d.product_id).join(', ');
+      await notifyAdmin(`👤 Buyer: <b>${buyerName}</b> | Produk: <code>${prodNames}</code>`, 'HTML');
+    }
+
+    // Kirim link ke user — dibungkus try-catch penuh agar error delivery tidak crash flow
     try {
       await ctx.telegram.editMessageText(chatId, msgId, null, deliveryText, {
         parse_mode: 'HTML',
@@ -314,37 +345,14 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
           ...Markup.inlineKeyboard([[Markup.button.callback('🏠 Menu Utama', 'menu_main_keep')]])
         });
       } catch (err2) {
-        logger.error(`[PAYMENT] sendMessage fallback GAGAL (${err2.message}).`);
-        await ctx.telegram.sendMessage(chatId, deliveryText.replace(/<[^>]*>/g, ''), {
-          ...Markup.inlineKeyboard([[Markup.button.callback('🏠 Menu Utama', 'menu_main_keep')]])
-        });
-      }
-    }
-
-    // [FIX] Log payment.success SATU KALI dengan amount BENAR — logger v2 kirim alert ke admin otomatis
-    const buyerName = (await User.findById(chatId).lean())?.first_name || 'Unknown';
-    const order2 = await Order.findById(orderId).lean();
-    const finalAmount = order2?.total_amount || updatedOrder.total_amount || 0;
-    logger.payment.success(orderId, chatId, finalAmount, 'poll');
-    logger.payment.delivered(orderId, chatId, deliveries.length);
-    // Tambah info nama buyer ke log admin (selain yg dikirim oleh logger.payment.success)
-    if (buyerName !== 'Unknown') {
-      // Kirim detail produk ke admin (logger.payment.success hanya kirim amount)
-      const prodNames = deliveries.map(d => d.product_id).join(', ');
-      await notifyAdmin(`👤 Buyer: <b>${buyerName}</b> | Produk: <code>${prodNames}</code>`, 'HTML');
-    }
-    // Update User CRM Stats
-    const order = await Order.findById(orderId).lean();
-    if (order) {
-      await User.findByIdAndUpdate(chatId, {
-        $inc: { purchase_count: 1, total_spent: order.total_amount }
-      });
-      await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
-      // [PAY-09] Increment used_count diskon HANYA saat payment SUCCESS (bukan saat checkout PENDING)
-      // Ini memastikan kuota diskon tidak berkurang untuk order yang tidak jadi dibayar
-      if (order.discount_id) {
-        const { Discount } = require('./database');
-        await Discount.findByIdAndUpdate(order.discount_id, { $inc: { used_count: 1 } });
+        logger.warn(`[PAYMENT] sendMessage HTML gagal (${err2.message}). Fallback plain text.`);
+        try {
+          await ctx.telegram.sendMessage(chatId, deliveryText.replace(/<[^>]*>/g, ''), {
+            ...Markup.inlineKeyboard([[Markup.button.callback('🏠 Menu Utama', 'menu_main_keep')]])
+          });
+        } catch (err3) {
+          logger.error(`[PAYMENT] Semua delivery gagal untuk chatId ${chatId}:`, err3.message);
+        }
       }
     }
 
