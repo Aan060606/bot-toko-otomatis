@@ -206,9 +206,8 @@ async function sendSafe(bot, userId, text, options = {}) {
         // Video: bisa caption+tombol dalam 1 pesan
         await bot.telegram.sendVideo(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
       } else {
-        // GIF/Animation: kirim GIF dulu (tanpa teks), lalu teks+tombol dalam 1 pesan
-        await bot.telegram.sendAnimation(userId, hFile);
-        await bot.telegram.sendMessage(userId, text, extra);
+        // GIF/Animation: sekarang kirim gabung dalam 1 pesan (caption + tombol)
+        await bot.telegram.sendAnimation(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
       }
     } else {
       // Teks only
