@@ -950,6 +950,9 @@ async function runDripFollowUp(bot) {
         continue;
       }
 
+      // [FIX SPAM] Cek cooldown — max 1 drip per user per hari (walau punya banyak produk)
+      if (isInCooldown(user)) { stats.skipped++; continue; }
+
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
         continue;
@@ -1043,6 +1046,8 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
         continue;
       }
+      // [FIX SPAM] Max 1 drip per user per hari
+      if (isInCooldown(user)) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
@@ -1121,6 +1126,8 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
         continue;
       }
+      // [FIX SPAM] Max 1 drip per user per hari
+      if (isInCooldown(user)) { stats.skipped++; continue; }
 
       const product = await Product.findById(log.product_id).lean();
       if (!product) {
