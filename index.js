@@ -370,11 +370,15 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
           if (boughtNames.length === 0) return;
           const pName = boughtNames.join(' & ');
 
-          // Cari non-buyer aktif
+          // Cari non-buyer aktif yang BELUM MENDAPATKAN pesan marketing dalam 24 jam terakhir (Anti-Spam)
           const recentNonBuyers = await User.find({
             purchase_count: { $in: [0, null] },
             is_blocked: { $ne: true },
             last_active_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+            $or: [
+              { last_broadcast_at: null },
+              { last_broadcast_at: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } }
+            ],
             _id: { $ne: chatId } // Jangan kirim ke pembeli itu sendiri
           }).sort({ last_active_at: -1 }).limit(5).lean();
 
@@ -387,6 +391,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
             
             for (const nb of recentNonBuyers) {
               await ctx.telegram.sendMessage(nb._id, msg, { parse_mode: 'HTML', ...keyboard }).catch(() => {});
+              await User.findByIdAndUpdate(nb._id, { last_broadcast_at: new Date() }).catch(() => {}); // Set cooldown 24 jam
               await new Promise(r => setTimeout(r, 1000));
             }
           }
