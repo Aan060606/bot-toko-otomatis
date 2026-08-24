@@ -361,14 +361,24 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     if (process.env.NODE_ENV !== "test") {
       setTimeout(async () => {
         try {
-          // Ambil nama produk yang dibeli
-          let boughtNames = [];
+          // Ambil produk yang dibeli
+          let boughtProducts = [];
           for (const d of deliveries) {
             const prod = await Product.findById(d.product_id).lean();
-            if (prod) boughtNames.push(prod.name);
+            if (prod) boughtProducts.push(prod);
           }
-          if (boughtNames.length === 0) return;
-          const pName = boughtNames.join(' & ');
+          if (boughtProducts.length === 0) return;
+          
+          const pName = boughtProducts.map(p => p.name).join(' & ');
+
+          // Ambil media fallback dari produk yang dibeli atau produk lain
+          let mediaProd = boughtProducts.find(p => p.promo_image_id);
+          if (!mediaProd) {
+            const fallbacks = await Product.find({ active: 1, promo_image_id: { $exists: true, $ne: null, $ne: '' } }).lean();
+            if (fallbacks.length > 0) {
+              mediaProd = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+            }
+          }
 
           // Cari non-buyer aktif yang BELUM MENDAPATKAN pesan marketing dalam 24 jam terakhir (Anti-Spam)
           const recentNonBuyers = await User.find({
@@ -384,13 +394,24 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
 
           if (recentNonBuyers.length > 0) {
             const msg = `🔔 <b>Baru saja terjadi!</b>\n\n` +
-                        `Seseorang baru bergabung dan kini punya akses ke koleksi subtitle Indonesia eksklusif dari J-SUB.\n\n` +
-                        `<blockquote>J-SUB bukan cuma kumpulin video. Subtitle Indonesia-nya dikerjakan sendiri oleh tim kami.</blockquote>\n\n` +
+                        `Seseorang baru bergabung dan kini punya akses VIP ke <b>${pName}</b>.\n\n` +
+                        `<blockquote>Koleksi premium kami selalu di-update. Jangan sampai ketinggalan akses eksklusifnya.</blockquote>\n\n` +
                         `👇 <b>Lihat Koleksi VIP:</b>`;
             const keyboard = Markup.inlineKeyboard([[Markup.button.callback('🎁 Lihat VIP Menu', 'menu_main_keep')]]);
             
             for (const nb of recentNonBuyers) {
-              await ctx.telegram.sendMessage(nb._id, msg, { parse_mode: 'HTML', ...keyboard }).catch(() => {});
+              try {
+                if (mediaProd && mediaProd.promo_image_id) {
+                  const mediaType = mediaProd.promo_media_type || 'photo';
+                  if (mediaType === 'video' || mediaType === 'animation') {
+                    await ctx.telegram.sendVideo(nb._id, mediaProd.promo_image_id, { caption: msg, parse_mode: 'HTML', ...keyboard });
+                  } else {
+                    await ctx.telegram.sendPhoto(nb._id, mediaProd.promo_image_id, { caption: msg, parse_mode: 'HTML', ...keyboard });
+                  }
+                } else {
+                  await ctx.telegram.sendMessage(nb._id, msg, { parse_mode: 'HTML', ...keyboard });
+                }
+              } catch(e) {}
               await User.findByIdAndUpdate(nb._id, { last_broadcast_at: new Date() }).catch(() => {}); // Set cooldown 24 jam
               await new Promise(r => setTimeout(r, 1000));
             }
