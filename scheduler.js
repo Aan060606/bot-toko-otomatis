@@ -22,6 +22,7 @@
 const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult, CronProgress } = require('./database');
 const { Markup } = require('telegraf');
 const logger     = require('./logger');
+const store      = require('./store'); // Required to check global discounts
 
 const cron = require('node-cron');
 let previewModule = null;
@@ -52,7 +53,17 @@ function strikeThrough(text) {
   return text.split('').join('\u0336') + '\u0336';
 }
 
-function buildProductMarkup(product, discountAmount = 0) {
+async function buildProductMarkup(userId, product, discountAmount = 0) {
+  // [FIX] Cek diskon global jika tidak ada diskon spesifik dari campaign
+  if (discountAmount === 0 && userId && product) {
+    try {
+      const activeDisc = await store.applyAutomaticDiscount(userId, product._id, product.price);
+      if (activeDisc) {
+        discountAmount = activeDisc.deduction;
+      }
+    } catch(e) {}
+  }
+
   const buttons = [];
   if (product.preview_url) {
     buttons.push([Markup.button.url(`📺 Preview Content ${product.name}`, product.preview_url)]);
@@ -809,7 +820,7 @@ async function runCrossSellCampaign(bot, allProducts) {
             `👇 <b>Upgrade Sekarang</b>`;
     }
 
-    const keyboard = buildProductMarkup(targetProduct);
+    const keyboard = await buildProductMarkup(user._id, targetProduct);
     const crossMediaArr  = targetProduct.promo_media?.length > 1 ? targetProduct.promo_media : null;
     const crossPromoImg  = targetProduct.promo_image_id || hFile;
     const crossPromoType = targetProduct.promo_image_id ? (targetProduct.promo_media_type || 'photo') : hType;
@@ -1009,7 +1020,7 @@ async function runDripFollowUp(bot) {
           `👇 <b>Gabung Sekarang</b>`;
 
       let keyboard = null;
-      if (product) keyboard = buildProductMarkup(product);
+      if (product) keyboard = await buildProductMarkup(user._id, product);
 
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S2', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
@@ -1087,7 +1098,7 @@ async function runDripFollowUp(bot) {
           `👇 <b>Pakai Diskon Sekarang</b>`;
 
       let keyboard = null;
-      if (product) keyboard = buildProductMarkup(product, discountAmount);
+      if (product) keyboard = await buildProductMarkup(user._id, product, discountAmount);
 
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S3', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
@@ -1151,7 +1162,7 @@ async function runDripFollowUp(bot) {
         `<blockquote>Setelah ini tidak ada lagi penawaran harga khusus untuk produk ini.</blockquote>\n\n` +
         `👇 <b>Ini Kesempatan Terakhir Saya</b>`;
 
-      const keyboard = buildProductMarkup(product, discountAmount);
+      const keyboard = await buildProductMarkup(user._id, product, discountAmount);
       const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S4', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
@@ -1307,7 +1318,7 @@ async function runPostPurchaseFollowUp(bot) {
       active: true
     });
 
-    const keyboard = buildProductMarkup(nextProduct);
+    const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
     const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
     const result   = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_3H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
@@ -1362,7 +1373,7 @@ async function runPostPurchaseFollowUp(bot) {
       active: true
     });
 
-    const keyboard = buildProductMarkup(nextProduct);
+    const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
     const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
     const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_12H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
@@ -1758,7 +1769,10 @@ async function sendTestMarketing(bot, userId, type) {
   
   const allProducts = await Product.find({ active: 1 }).lean();
   let defaultProduct = allProducts.length > 0 ? allProducts[0] : { _id: "dummy", name: "Produk Contoh", price: 50000 };
-  let keyboard = buildProductMarkup(defaultProduct);
+  
+  // Fake userId untuk test
+  const testUserId = userId || process.env.ADMIN_CHAT_ID;
+  let keyboard = await buildProductMarkup(testUserId, defaultProduct);
 
   let msg = '';
 
@@ -1783,7 +1797,7 @@ async function sendTestMarketing(bot, userId, type) {
     const discountAmount = Math.floor(defaultProduct.price * (discountRule.percentage / 100));
     
     msg = `\u{1F48E} *${discountRule.title} ${defaultProduct.name}!*\n\n\u27DF Potongan otomatis (24 Jam)\n\n\u{1F447} Klaim diskon sekarang`;
-    keyboard = buildProductMarkup(defaultProduct, discountAmount);
+    keyboard = await buildProductMarkup(mockUser._id, defaultProduct, discountAmount);
   } else if (type === 'downsell') {
     msg = `\u{1F614} *Masih Ragu, Bos?*\n\nMungkin penawaran sebelumnya belum cocok untukmu saat ini.\n\nSebagai opsi paling hemat, cobalah *${defaultProduct.name}*!\n\n\u27DF Harga sangat terjangkau\n\u27DF Akses instan\n\n\u{1F447} Coba opsi hemat ini`;
   } else {
