@@ -646,11 +646,13 @@ async function runNonBuyerCampaign(bot) {
         }
 
         // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
-        await DripLog.findOneAndUpdate(
-          { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1, converted: false },
-          { $setOnInsert: { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
-          { upsert: true }
-        );
+        try {
+          await DripLog.findOneAndUpdate(
+            { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1 },
+            { $setOnInsert: { user_id: user._id, product_id: String(dripProd._id), campaign_type: 'NON_BUYER', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
+            { upsert: true }
+          );
+        } catch (e) {}
       }
     } else {
       stats.failed++;
@@ -840,11 +842,13 @@ async function runCrossSellCampaign(bot, allProducts) {
       }).lean();
       if (!existingDrip) {
         // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
-        await DripLog.findOneAndUpdate(
-          { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1, converted: false },
-          { $setOnInsert: { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
-          { upsert: true }
-        );
+        try {
+          await DripLog.findOneAndUpdate(
+            { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1 },
+            { $setOnInsert: { user_id: user._id, product_id: String(targetProduct._id), campaign_type: 'CROSS_SELL', stage: 1, sent_at: new Date(), converted: false, variant: Math.random() > 0.5 ? 'A' : 'B' } },
+            { upsert: true }
+          );
+        } catch (e) {}
       } else {
         // Update sent_at agar stage 2/3 timer dihitung dari sekarang
         await DripLog.findByIdAndUpdate(existingDrip._id, { sent_at: new Date() });
