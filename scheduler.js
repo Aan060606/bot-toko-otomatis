@@ -261,6 +261,10 @@ function isInCooldown(user, { bypassForBuyer = false } = {}) {
   
   // Dihapus: 24-hour global block. User boleh dapat >1 pesan marketing per hari
   // jika pesannya dari funnel/produk yang BERBEDA.
+  
+  // Daftarkan user ke set agar tidak dikirimi pesan funnel lain di run (jam) yang sama
+  sentInThisRun.add(String(user._id));
+  
   return false;
 }
 
