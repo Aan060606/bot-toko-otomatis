@@ -530,7 +530,8 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
               return;
             }
           }
-      }
+        }
+      } // end if (secondsLeft > 0)
 
       // [FIX] Reminder sekarang muncul di menit ke-25 (5 menit sebelum expire 30 menit)
       if (!reminderSent && elapsed >= 25 * 60 * 1000 && secondsLeft > 0) {
