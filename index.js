@@ -548,7 +548,7 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
         } catch (_) {}
       }
 
-      // Timeout 15 menit habis dan webhook/poll tidak pernah detect → expired
+      // Timeout MAX_WAIT_MINUTES habis dan webhook/poll tidak pernah detect → expired
       if (secondsLeft <= 0) {
         stopPolling(donationId);
         // Cek sekali lagi via API — mungkin baru saja bayar
@@ -562,7 +562,7 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
         } catch (_) {}
         const finalCheck = await Order.findById(orderId).select('status').lean();
         if (finalCheck?.status === 'SUCCESS') return;
-        logger.payment.expired(orderId, chatId, 0, 'timeout_15min');
+        logger.payment.expired(orderId, chatId, 0, `timeout_${MAX_WAIT_MINUTES}min`);
         try { await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED' }); } catch (e) {}
         if (qrMsgId) try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
         await handleOrderExpired(ctx, chatId, msgId, orderId);
@@ -2720,9 +2720,9 @@ bot.command('force_marketing', async (ctx) => {
 
 async function resumePendingOrders() {
   try {
-    // [BUGFIX] Gunakan 14 menit (< MAX_WAIT_MINUTES=15) agar tidak merujuk order yang sudah expired
-    const fourteenMinsAgo = new Date(Date.now() - 14 * 60 * 1000);
-    const pendingOrders = await Order.find({ status: 'PENDING', created_at: { $gte: fourteenMinsAgo } }).lean();
+    // [FIX] Gunakan MAX_WAIT_MINUTES-1 agar konsisten dengan timeout yang sebenarnya
+    const resumeWindow = new Date(Date.now() - (MAX_WAIT_MINUTES - 1) * 60 * 1000);
+    const pendingOrders = await Order.find({ status: 'PENDING', created_at: { $gte: resumeWindow } }).lean();
     
     if (pendingOrders.length > 0) {
       logger.info(`[AUTO-RESUME] Menemukan ${pendingOrders.length} order PENDING. Melanjutkan polling...`);
