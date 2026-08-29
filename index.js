@@ -477,6 +477,7 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
   const startTime = Date.now();
   const totalMs   = MAX_WAIT_MINUTES * 60 * 1000;
   let reminderSent = false;
+  let cfFailCount  = 0; // [FIX BUG#2] Counter untuk circuit breaker Cloudflare
 
   // [FIX KRITIS] Kembalikan API polling — webhook tidak reliable karena PUBLIC_URL kosong.
   // Poll Saweria API setiap 7 detik sebagai primary detection.
@@ -498,22 +499,37 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
           const statusData = await checkPaymentStatus(donationId);
           if (statusData && (statusData.status === 'settlement' || statusData.status === 'capture')) {
             stopPolling(donationId);
-            logger.payment.wsCaught(donationId, chatId); // pakai wsCaught untuk log SUCCESS di PAYMENT cat
+            logger.payment.wsCaught(donationId, chatId);
             await onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId);
             return;
           }
-          // Log kalau status masih pending/tidak dikenal
           if (statusData && statusData.status && statusData.status !== 'pending') {
             logger.debug(`[POLL] donationId=${donationId} status=${statusData.status}`);
           }
+          // Reset CF failure counter jika poll berhasil
+          cfFailCount = 0;
         } catch (pollErr) {
-          // CF atau network error — log ringkas agar bisa dimonitor
           const isCloudflare = pollErr.message?.includes('DOCTYPE') || pollErr.message?.includes('Just a moment');
           if (isCloudflare) {
             logger.cloudflare.hit(donationId, 1);
+            cfFailCount++;
+            // [FIX BUG#2] Circuit breaker: hentikan polling setelah 10 CF failure berturut-turut
+            // Sebelumnya: retry tanpa batas = 631 CF challenge dalam 7 hari, CPU terbuang
+            if (cfFailCount >= 10) {
+              logger.warn(`[CIRCUIT BREAKER] CF gagal ${cfFailCount}x berturut-turut untuk ${donationId}. Hentikan polling, notif admin.`);
+              stopPolling(donationId);
+              // Notif admin agar bisa manual follow-up
+              const adminId = process.env.ADMIN_CHAT_ID;
+              if (adminId) {
+                const order = await Order.findById(orderId).lean();
+                bot.telegram.sendMessage(adminId,
+                  `⚠️ <b>CIRCUIT BREAKER AKTIF</b>\n\nCloudflare gagal bypass <b>${cfFailCount}x berturut-turut</b> untuk:\n• Order: <code>${orderId}</code>\n• User: <code>${chatId}</code>\n• Produk: ${order?.product_name || '?'}\n\n<b>Aksi:</b> Jika user konfirmasi sudah bayar, gunakan <code>/rescue ${chatId}</code> untuk kirim produk manual.`,
+                  { parse_mode: 'HTML' }
+                ).catch(() => {});
+              }
+              return;
+            }
           }
-          // Tidak crash — lanjut polling berikutnya
-        }
       }
 
       // [FIX] Reminder sekarang muncul di menit ke-25 (5 menit sebelum expire 30 menit)
@@ -2883,7 +2899,46 @@ if (process.env.NODE_ENV !== "test") {
                   logger.warn(`[WEBHOOK] donation_id ${donationIdFromWebhook} tidak cocok. Abaikan.`);
                 }
                 if (!order && !donationIdFromWebhook) {
-                  console.log(`[WEBHOOK] Tidak ada order PENDING untuk UID ${userId}. Mungkin sudah diproses.`);
+                  // [FIX BUG#5] Cek apakah ada order EXPIRED dari user ini yang baru saja dibayar
+                  // Kasus Zey: order expired duluan karena CF lambat, tapi user tetap transfer
+                  const expiredOrder = await Order.findOne({
+                    user_id: userId,
+                    status: 'EXPIRED',
+                    created_at: { $gte: new Date(Date.now() - 60 * 60 * 1000) } // dalam 1 jam terakhir
+                  }).sort({ created_at: -1 });
+                  
+                  if (expiredOrder && !isNaN(amount) && amount > 0) {
+                    const TOLERANCE_PCT = Math.ceil(expiredOrder.total_amount * 0.10);
+                    const amountWithFee = Math.ceil(amount * 1.04 / 500) * 500;
+                    if (Math.abs(amountWithFee - expiredOrder.total_amount) <= TOLERANCE_PCT) {
+                      // User bayar setelah order expired! Rescue otomatis.
+                      logger.warn(`[WEBHOOK RESCUE] Order ${expiredOrder._id} expired tapi user ${userId} (${donator}) sudah transfer Rp${amount}! Melakukan rescue...`);
+                      // Reaktivasi order
+                      await Order.findByIdAndUpdate(expiredOrder._id, { status: 'PENDING' });
+                      const mockCtx = { telegram: bot.telegram };
+                      await onPaymentSuccess(mockCtx, userId, expiredOrder.status_msg_id, expiredOrder.donation_id, expiredOrder._id, expiredOrder.qr_msg_id);
+                      // Notif admin
+                      const adminId = process.env.ADMIN_CHAT_ID;
+                      if (adminId) {
+                        bot.telegram.sendMessage(adminId,
+                          `✅ <b>WEBHOOK RESCUE SUKSES</b>\n\nUser <code>${userId}</code> (${donator}) transfer <b>Rp${amount}</b> setelah order expired.\nOrder <code>${expiredOrder._id}</code> berhasil di-rescue dan produk sudah dikirim otomatis!`,
+                          { parse_mode: 'HTML' }
+                        ).catch(() => {});
+                      }
+                    } else {
+                      console.log(`[WEBHOOK] Tidak ada order PENDING/EXPIRED yang cocok untuk UID ${userId}. Jumlah: Rp${amount}.`);
+                      // Notif admin untuk donasi random yang tidak cocok
+                      const adminId = process.env.ADMIN_CHAT_ID;
+                      if (adminId && amount >= 5000) { // hanya notif kalau nominal cukup besar
+                        bot.telegram.sendMessage(adminId,
+                          `📥 <b>DONASI TIDAK COCOK ORDER</b>\nDari: ${donator} (UID: ${userId})\nJumlah: <b>Rp${amount}</b>\nTidak ditemukan order yang sesuai.\n\nCek manual jika perlu.`,
+                          { parse_mode: 'HTML' }
+                        ).catch(() => {});
+                      }
+                    }
+                  } else {
+                    console.log(`[WEBHOOK] Tidak ada order PENDING untuk UID ${userId}. Mungkin sudah diproses.`);
+                  }
                 }
                 
                 if (order) {
