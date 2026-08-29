@@ -2387,17 +2387,23 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
 
     logger.checkout.qrCreated(userId, orderId, finalAmount, donation.id);
     
-    // Hitung jam expire spesifik untuk ditampilkan ke user
-    const expireTime = new Date(Date.now() + 15 * 60 * 1000);
+    // [FIX BUG#8] Hitung jam expire berdasarkan MAX_WAIT_MINUTES (30 menit)
+    const expireTime = new Date(Date.now() + MAX_WAIT_MINUTES * 60 * 1000);
     const expireStr = expireTime.toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' });
+
+    // [FIX KONVERSI] Sederhanakan caption QR — tampilkan hanya total akhir
+    // Sebelumnya: breakdown biaya QRIS yang bikin user bingung & tidak percaya
+    // ("Katanya diskon tapi malah ada biaya tambah?")
+    // Sesudah: fokus ke action (scan & bayar), totalnya jelas 1 angka
+    const discountLine = discountInfo
+      ? `\n🎁 ${discountInfo.replace(/[*_]/g,'').trim()}  →  <b>${formatRupiah(finalAmount)}</b>`
+      : `\n💳 <b>Total: ${formatRupiah(finalAmount)}</b>`;
 
     const qrCaption = [
       `✅ <b>Pesanan kamu sudah terkunci!</b>`,
       ``,
       `Order ID: <code>${orderId}</code>`,
-      `💵 Harga: <s>${formatRupiah(items[0].price)}</s>${discountInfo ? ' → ' + discountInfo.replace(/[*_]/g,'') : ''}`,
-      `💸 Biaya QRIS: +${formatRupiah(finalAmount - amount)}`,
-      `💳 <b>Total Bayar: ${formatRupiah(finalAmount)}</b>`,
+      discountLine,
       ``,
       `📱 <b>Cara bayar (30 detik selesai):</b>`,
       `1️⃣ Buka GoPay / OVO / DANA / BCA Mobile / m-Banking apapun`,

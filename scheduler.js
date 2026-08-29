@@ -2057,15 +2057,21 @@ function startCron(bot) {
 
   cronTasks = [marketingTask, backupTask, cleanupTask, metricsTask, discountReminderTask, stuckOrderTask];
   
-  // Langsung jalankan marketing sekali saat bot nyala (startup run)
-  // Gunakan daily key agar tidak bikin CronProgress duplikat
-  const jakartaNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
-  const startupStr = `${jakartaNow.getFullYear()}-${String(jakartaNow.getMonth()+1).padStart(2,'0')}-${String(jakartaNow.getDate()).padStart(2,'0')}`;
-  console.log('[CRON] 🚀 Marketing Scheduler (node-cron) started. Dijadwalkan setiap jam, restart-proof!');
-  console.log('[CRON] Menjalankan startup run untuk tanggal:', startupStr);
-  runMarketingCampaign(bot, startupStr)
-    .then(stats => console.log('[CRON] ✅ Startup run selesai. Stats:', JSON.stringify(stats)))
-    .catch(err => console.error('[CRON] ❌ Startup run gagal:', err.message));
+  // [FIX BUG#8] Startup run: hanya jalankan drip + cart-abandon saat restart
+  // BUKAN runMarketingCampaign penuh — karena itu bisa kirim campaign utama berkali-kali
+  // jika container sering restart (misal: Coolify redeploy). Jika campaign utama
+  // sudah COMPLETED hari ini, guard di runMarketingCampaign sudah mencegahnya.
+  // Tapi jika terjadi restart tepat di saat campaign belum selesai = dobel kirim!
+  // Solusi: startup hanya jalankan sub-tugas yang aman di-run berulang (drip + cart).
+  console.log('[CRON] 🚀 Marketing Scheduler (node-cron) started. Dijadwalkan jam 10:00 WIB setiap hari.');
+  console.log('[CRON] Startup: hanya drip follow-up & cart abandon (bukan campaign utama).');
+  Promise.all([
+    runDripFollowUp(bot),
+    runCartAbandonCampaign(bot),
+    runPostPurchaseFollowUp(bot)
+  ])
+    .then(() => console.log('[CRON] ✅ Startup drip selesai.'))
+    .catch(err => console.error('[CRON] ❌ Startup drip gagal:', err.message));
 }
 
 
