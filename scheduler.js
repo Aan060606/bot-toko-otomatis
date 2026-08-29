@@ -595,15 +595,25 @@ async function runNonBuyerCampaign(bot) {
     }
 
     // Jika memberi diskon, simpan ke database diskon
+    // [FIX BUG#DISC-DUP] Cek duplikat dulu — jangan buat diskon baru jika user
+    // sudah punya diskon aktif yang belum expired. Ini mencegah DB bloat
+    // (sebelumnya: 1.813 records untuk 485 user = 3.7 diskon/user rata-rata)
     if (discountVal > 0) {
-      await Discount.create({
+      const existingDisc = await Discount.findOne({
         target_user_id: Number(user._id),
-        target_product_id: null,
-        type: 'PERCENTAGE',
-        value: discountVal,
-        valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 jam expire
-        active: true
-      });
+        active: true,
+        valid_until: { $gt: new Date() }
+      }).lean();
+      if (!existingDisc) {
+        await Discount.create({
+          target_user_id: Number(user._id),
+          target_product_id: null,
+          type: 'PERCENTAGE',
+          value: discountVal,
+          valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 jam expire
+          active: true
+        });
+      }
     }
 
     // 🔥 Kirim preview dulu agar user lihat konten nyata sebelum pitch
@@ -1111,12 +1121,23 @@ async function runDripFollowUp(bot) {
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S3', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
-        await Discount.create({
+        // [FIX BUG#S3-DISC] Tambah active:true — tanpanya diskon tidak pernah berlaku
+        // saat checkout karena applyAutomaticDiscount() query {active:true}
+        // [FIX BUG#DISC-DUP] Cek duplikat — jangan buat diskon baru jika sudah ada
+        const existingS3Disc = await Discount.findOne({
           target_user_id: Number(user._id),
-          type: 'PERCENTAGE',
-          value: discountRule.percentage,
-          valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
-        });
+          active: true,
+          valid_until: { $gt: new Date() }
+        }).lean();
+        if (!existingS3Disc) {
+          await Discount.create({
+            target_user_id: Number(user._id),
+            type: 'PERCENTAGE',
+            value: discountRule.percentage,
+            valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 jam
+            active: true  // [FIX] WAJIB ada agar berlaku di checkout!
+          });
+        }
         stats.stage3++;
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
