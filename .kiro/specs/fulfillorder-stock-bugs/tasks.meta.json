@@ -1,0 +1,177 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1. Tulis bug condition exploration tests (SEBELUM implement fix)": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325323448
+      },
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325341838
+      },
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787326270381
+      }
+    ],
+    "2. Tulis preservation property tests (SEBELUM implement fix)": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325323844
+      },
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787326279367
+      },
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787328115806
+      }
+    ],
+    "3.1 BUG-01: Ganti teks pesan stok kosong di store.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325323913
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787330350407
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331375226
+      }
+    ],
+    "3.2 BUG-02: Pisahkan auto-restock dari loop quantity di store.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325323964
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787330351201
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331376275
+      }
+    ],
+    "3.3 BUG-03: Tambah guard idempotency di store.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324018
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787330352162
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331377192
+      }
+    ],
+    "3.4 BUG-04: Tambah DripLog ke import di index.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324082
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787330353460
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331378189
+      }
+    ],
+    "3.5 BUG-05: Hapus runInBand dari jest.config.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324123
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787330354284
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331379053
+      }
+    ],
+    "3.6 BUG-06: Pindahkan deklarasi rotationIndex di scheduler.js": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324162
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787331387468
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787332452827
+      }
+    ],
+    "3.7 Verifikasi exploration test BUG-01/02/03 sekarang pass": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324199
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787332460659
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787332612903
+      }
+    ],
+    "3.8 Verifikasi preservation tests masih pass setelah fix": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324236
+      },
+      {
+        "executionId": "12749d96-469a-4dd8-976c-65cf79da9097",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787332622152
+      }
+    ],
+    "4. Checkpoint — Pastikan semua test pass": [
+      {
+        "executionId": "526a4eb2-fcf0-4fb0-a76f-d779dfc467ba",
+        "chatSessionId": "sess_05b398fe-9e68-4a07-8f6d-9efc74f467a0",
+        "timestamp": 1787325324312
+      }
+    ]
+  }
+}

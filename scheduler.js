@@ -1776,8 +1776,21 @@ async function sendTestMarketing(bot, userId, type) {
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
   
   const allProducts = await Product.find({ active: 1 }).lean();
-  let defaultProduct = allProducts.length > 0 ? allProducts[0] : { _id: "dummy", name: "Produk Contoh", price: 50000 };
-  
+  // [FIX BUG#4] Sebelumnya selalu allProducts[0] = selalu produk pertama di DB (VIP JAV SUB INDO)
+  // sehingga tombol preview selalu salah produk. Sekarang gunakan produk TERPOPULER.
+  let defaultProduct = null;
+  const popular = await OrderItem.aggregate([
+    { $group: { _id: '$product_id', count: { $sum: 1 } } },
+    { $sort: { count: -1 } },
+    { $limit: 1 }
+  ]);
+  if (popular.length > 0) {
+    defaultProduct = allProducts.find(p => String(p._id) === String(popular[0]._id)) || allProducts[0];
+  } else {
+    defaultProduct = allProducts[0];
+  }
+  if (!defaultProduct) defaultProduct = { _id: 'dummy', name: 'Produk Contoh', price: 50000 };
+
   // Fake userId untuk test
   const testUserId = userId || process.env.ADMIN_CHAT_ID;
   let keyboard = await buildProductMarkup(testUserId, defaultProduct);
@@ -1900,12 +1913,13 @@ function startCron(bot) {
   cronTasks.forEach(t => t.destroy());
   cronTasks = [];
 
-  // ── TASK 1: Marketing Campaign — Setiap jam tepat (restart-proof!) ──────────
-  // Format: 0 * * * * = Detik 0, Menit 0, Setiap Jam, Setiap Hari
-  const marketingTask = cron.schedule('0 * * * *', async () => {
+  // ── TASK 1: Marketing Campaign — Setiap hari jam 10:00 WIB ─────────────────
+  // [FIX BUG#1] Sebelumnya '0 * * * *' (setiap jam) → jam 02:00 WIB yang menyebabkan
+  // 32 user langsung block bot sekaligus karena notif dini hari.
+  // Sekarang hanya jalan 1x sehari jam 10:00 WIB.
+  const marketingTask = cron.schedule('0 10 * * *', async () => {
     if (!marketingEnabled) return;
     const now = new Date();
-    // Format: "2026-07-27-17" — hourly key agar tiap jam bisa kirim drip sesuai timing
     const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
     const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}-${String(jakartaDate.getHours()).padStart(2,'0')}`;
     console.log(`[CRON] ⏰ Menjalankan Marketing Automations (${now.toISOString()})...`);

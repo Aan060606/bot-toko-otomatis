@@ -24,7 +24,7 @@ const ADMIN_CHAT_ID = (process.env.ADMIN_CHAT_ID || '').trim() || null;
 const SAWERIA_USERNAME = (process.env.SAWERIA_USERNAME || 'zahwafe').trim();
 const SAWERIA_USER_ID = (process.env.SAWERIA_USER_ID || 'd8e876df-405c-4e08-9708-9808b9037ea5').trim();
 const CHECK_INTERVAL_MS = 7000;
-const MAX_WAIT_MINUTES = 15;
+const MAX_WAIT_MINUTES = 30; // [FIX BUG#3] Extended from 15→30 min. Kasus Zey: user bayar tapi order sudah expired duluan karena CF lambat
 
 if (!BOT_TOKEN) {
   console.error("❌ BOT_TOKEN tidak diset!");
@@ -516,8 +516,8 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
         }
       }
 
-      // [CONVERSION] Countdown reminder menit ke-10 (5 menit sebelum expire)
-      if (!reminderSent && elapsed >= 10 * 60 * 1000 && secondsLeft > 0) {
+      // [FIX] Reminder sekarang muncul di menit ke-25 (5 menit sebelum expire 30 menit)
+      if (!reminderSent && elapsed >= 25 * 60 * 1000 && secondsLeft > 0) {
         reminderSent = true;
         try {
           logger.payment.reminderSent(chatId, orderId);
