@@ -133,6 +133,9 @@ const logger={
         if(stuck>0)issues.push(`🔴 ${stuck} order STUCK PENDING >20 menit`);
         const prods=await Product.find({active:1}).lean();
         for(const p of prods){
+          // [FIX] Produk digital (type:'digital' atau punya restock) auto-restock setelah terjual
+          // → jangan pernah flag sebagai "stok kritis" karena selalu ada 1 sisa setelah restock
+          if(p.type==='digital'||p.type==='unlimited'||p.restock_on_sold) continue;
           const avail=await Stock.countDocuments({product_id:String(p._id),status:'AVAILABLE'});
           if(avail===0)issues.push(`🔴 STOK HABIS: ${p.name} — tambah segera!`);
           else if(avail<=2)issues.push(`🟡 Stok kritis (${avail} sisa): ${p.name}`);
