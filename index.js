@@ -518,6 +518,12 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
             if (cfFailCount >= 10) {
               logger.warn(`[CIRCUIT BREAKER] CF gagal ${cfFailCount}x berturut-turut untuk ${donationId}. Hentikan polling, notif admin.`);
               stopPolling(donationId);
+              // [FIX BUG#CB-STUCK] Mark order EXPIRED agar tidak stuck PENDING selamanya
+              // Sebelumnya: stopPolling saja tapi order tetap PENDING → stuck_pending terus
+              try {
+                await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED', expired_reason: 'circuit_breaker' });
+                await handleOrderExpired(ctx, chatId, msgId, orderId);
+              } catch (_) {}
               // Notif admin agar bisa manual follow-up
               const adminId = process.env.ADMIN_CHAT_ID;
               if (adminId) {
@@ -2655,6 +2661,9 @@ bot.on('text', async (ctx, next) => {
 });
 
 bot.catch((err, ctx) => {
+  // [FIX] BUTTON_DATA_INVALID = user klik tombol dari pesan lama (sebelum restart)
+  // Ini normal dan tidak perlu di-log sebagai error — cukup ignore
+  if (err.message && err.message.includes('BUTTON_DATA_INVALID')) return;
   logger.error(`bot.catch:`, err.message);
 });
 
