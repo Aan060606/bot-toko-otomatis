@@ -302,18 +302,41 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     deliveryText += `<i>Simpan link ini baik-baik. Akses permanen — sekali bayar selamanya.</i>`;
 
     // [FIX KRITIS] Update User CRM Stats DULU sebelum kirim pesan
-    // Jika stats di-update setelah sendMessage dan sendMessage throw error,
-    // stats tidak akan terupdate (bubble ke outer catch). Pisahkan agar selalu jalan.
     try {
       const order = await Order.findById(orderId).lean();
       if (order) {
-        await User.findByIdAndUpdate(chatId, {
-          $inc: { purchase_count: 1, total_spent: order.total_amount }
-        });
+        // [FIX PURCHASE_COUNT] Gunakan native MongoDB driver untuk bypass
+        // Mongoose schema cast issue (_id: Number vs ObjectId)
+        // findByIdAndUpdate sering silent fail jika chatId tidak cocok dengan _id type
+        const db = User.db.db;
+        const userColl = db.collection('users');
+        const userDoc = await userColl.findOne({ _id: Number(chatId) });
+        if (userDoc) {
+          const newCount = (userDoc.purchase_count || 0) + 1;
+          const newSpent = (userDoc.total_spent || 0) + order.total_amount;
+          await userColl.replaceOne({ _id: Number(chatId) }, {
+            ...userDoc,
+            purchase_count: newCount,
+            total_spent: newSpent,
+            last_purchase_at: new Date(),
+            // [FIX DRIP SPAM] Set last_broadcast_at jauh ke depan agar tidak dapat marketing lagi
+            last_broadcast_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          });
+          logger.info(`[PAYMENT] User ${chatId} purchase_count updated to ${newCount}`);
+        } else {
+          logger.warn(`[PAYMENT] User ${chatId} tidak ditemukan di DB untuk update stats`);
+        }
+
+        // [FIX] Nonaktifkan semua diskon user setelah beli — tidak perlu lagi
+        const { Discount } = require('./database');
+        await Discount.updateMany(
+          { target_user_id: Number(chatId), active: true },
+          { $set: { active: false } }
+        ).catch(() => {});
+
         await trackEvent(chatId, 'PAYMENT_SUCCESS', null, { order_id: orderId, total_amount: order.total_amount });
         if (order.discount_id) {
-          const { Discount } = require('./database');
-          await Discount.findByIdAndUpdate(order.discount_id, { $inc: { used_count: 1 } });
+          await Discount.findByIdAndUpdate(order.discount_id, { $inc: { used_count: 1 } }).catch(() => {});
         }
       }
     } catch (statsErr) {

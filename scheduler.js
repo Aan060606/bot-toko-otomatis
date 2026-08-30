@@ -250,21 +250,27 @@ async function sendSafe(bot, userId, text, options = {}) {
 // Ini mencegah user mendapat 4x NON_BUYER atau 2x campaign berbeda dalam satu jam.
 const sentInThisRun = new Set();
 
-// Cek apakah user pernah dikirimi broadcast dalam 24 jam terakhir (Anti-Spam Shield)
-// [BUGFIX] Sebelumnya 6 jam - terlalu sering, user bisa terima hingga 4 pesan/hari
-// [FIX P1b] Tambah flag bypass untuk POST_PURCHASE — buyer tidak boleh di-skip
+// Cek cooldown per-segment untuk tiap user
+// [FIX TOTAL] Sebelumnya: hanya cek sentInThisRun (in-memory Set)
+// = setiap restart bot, Set kosong → user bisa terima marketing berkali-kali sehari
+// Sesudah: cek last_broadcast_at di DB + minimum 48 jam antar campaign WARM/HOT
+// Ini yang menyebabkan 2.149 NON_BUYER_WARM dalam 7 hari ke user yang sama!
+const CAMPAIGN_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48 jam minimum antar campaign
+
 function isInCooldown(user, { bypassForBuyer = false } = {}) {
-  if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false; // Admin kebal cooldown untuk testing
-  if (bypassForBuyer && user.purchase_count > 0) return false; // [FIX] Buyer bypass cooldown untuk POST_PURCHASE
-  // [FIX SPAM] Cek in-memory Set dulu — kalau sudah dikirim di run ini, skip
+  if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false;
+  if (bypassForBuyer && user.purchase_count > 0) return false;
+  // In-memory guard: jangan kirim >1 campaign ke user yang sama dalam 1 run
   if (sentInThisRun.has(String(user._id))) return true;
-  
-  // Dihapus: 24-hour global block. User boleh dapat >1 pesan marketing per hari
-  // jika pesannya dari funnel/produk yang BERBEDA.
-  
-  // Daftarkan user ke set agar tidak dikirimi pesan funnel lain di run (jam) yang sama
+
+  // [FIX] DB-level cooldown: cek last_broadcast_at
+  // Jika user sudah dapat campaign dalam 48 jam terakhir → skip
+  if (user.last_broadcast_at) {
+    const lastSent = new Date(user.last_broadcast_at).getTime();
+    if (Date.now() - lastSent < CAMPAIGN_COOLDOWN_MS) return true;
+  }
+
   sentInThisRun.add(String(user._id));
-  
   return false;
 }
 
@@ -467,12 +473,13 @@ function getProductCopy(products, segment) {
 
 async function runNonBuyerCampaign(bot) {
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
-  const nonBuyers = await User.find({ 
-    $or: [
-      { purchase_count: 0 },
-      { purchase_count: null },
-      { purchase_count: { $exists: false } }
-    ],
+
+  // [FIX KRITIS] Jangan andalkan purchase_count di User — sering tidak sinkron!
+  // Cari user yang BENAR-BENAR belum punya order SUCCESS di collection orders
+  const buyerUserIds = await Order.distinct('user_id', { status: 'SUCCESS' });
+
+  const nonBuyers = await User.find({
+    _id: { $nin: buyerUserIds },          // Tidak ada di daftar buyer nyata
     is_blocked: { $ne: true },
     last_active_at: { $gte: sixtyDaysAgo }
   }).lean();
@@ -640,6 +647,10 @@ async function runNonBuyerCampaign(bot) {
       else if (segment === 'INACTIVE') stats.inactive++;
       else stats.cold++;
 
+      // [FIX COOLDOWN] Update last_broadcast_at di DB setelah kirim berhasil
+      // Ini yang membuat cooldown 48 jam bisa bekerja di-run berikutnya
+      await User.findByIdAndUpdate(user._id, { $set: { last_broadcast_at: new Date() } }).catch(() => {});
+
       // Buat DripLog untuk setiap produk yang belum dibeli
       const unboughtForDrip = prodList;
       for (const dripProd of unboughtForDrip) {
@@ -650,13 +661,18 @@ async function runNonBuyerCampaign(bot) {
         }).lean();
         if (existingForProd) continue;
 
+        // [FIX] Cart abandon discount harus punya active:true!
         if (segment === 'CART_ABANDON' && String(dripProd._id) === String(unboughtForDrip[0]._id)) {
-          await Discount.create({
-            target_user_id: Number(user._id),
-            type: 'PERCENTAGE',
-            value: 10,
-            valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
-          });
+          const existCA = await Discount.findOne({ target_user_id: Number(user._id), active: true, valid_until: { $gt: new Date() } }).lean();
+          if (!existCA) {
+            await Discount.create({
+              target_user_id: Number(user._id),
+              type: 'PERCENTAGE',
+              value: 10,
+              valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000),
+              active: true
+            });
+          }
         }
 
         // [FIX DUPLIKAT] Upsert — aman kalau bot restart di tengah campaign
