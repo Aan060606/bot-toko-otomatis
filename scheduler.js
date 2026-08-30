@@ -49,8 +49,11 @@ function formatK(num) {
   return num >= 1000 ? (num / 1000) + 'k' : num.toString();
 }
 
+// [FIX BUTTON_DATA_INVALID] Unicode combining strikethrough (U+0336) di teks tombol
+// menyebabkan Telegram error BUTTON_DATA_INVALID untuk semua user!
+// Ganti dengan format teks biasa yang aman: coret visual pakai tanda ~
 function strikeThrough(text) {
-  return text.split('').join('\u0336') + '\u0336';
+  return `~${text}~`;
 }
 
 async function buildProductMarkup(userId, product, discountAmount = 0) {
@@ -236,7 +239,18 @@ async function sendSafe(bot, userId, text, options = {}) {
       err.description.includes('chat not found')
     );
     if (isBlocked) {
-      await User.findByIdAndUpdate(userId, { is_blocked: true });
+      // [FIX IS_BLOCKED] Gunakan native driver karena findByIdAndUpdate
+      // punya _id type mismatch (Number vs ObjectId) -> update silent fail
+      // Akibat bug ini: SEMUA 498 user ter-flag is_blocked=true!
+      try {
+        const db = User.db.db;
+        await db.collection('users').updateOne(
+          { _id: Number(userId) },
+          { $set: { is_blocked: true } }
+        );
+      } catch (_) {
+        await User.updateOne({ _id: userId }, { $set: { is_blocked: true } }).catch(() => {});
+      }
       logger.user.blocked(userId, err.description);
     } else {
       logger.marketing.failed(userId, options.campaign || 'UNKNOWN', err.message);
