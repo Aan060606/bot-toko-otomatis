@@ -131,15 +131,10 @@ const logger={
         const issues=[];
         const stuck=await Order.countDocuments({status:'PENDING',created_at:{$lt:new Date(Date.now()-20*60000)}});
         if(stuck>0)issues.push(`🔴 ${stuck} order STUCK PENDING >20 menit`);
-        const prods=await Product.find({active:1}).lean();
-        for(const p of prods){
-          // [FIX] Produk digital (type:'digital' atau punya restock) auto-restock setelah terjual
-          // → jangan pernah flag sebagai "stok kritis" karena selalu ada 1 sisa setelah restock
-          if(p.type==='digital'||p.type==='unlimited'||p.restock_on_sold) continue;
-          const avail=await Stock.countDocuments({product_id:String(p._id),status:'AVAILABLE'});
-          if(avail===0)issues.push(`🔴 STOK HABIS: ${p.name} — tambah segera!`);
-          else if(avail<=2)issues.push(`🟡 Stok kritis (${avail} sisa): ${p.name}`);
-        }
+        // [FIX TOTAL] Hapus cek stok dari health check
+        // Semua produk adalah digital (link Telegram) dengan auto-restock setelah terjual
+        // → stok selalu ada minimal 1, warning "stok kritis" selalu false alarm
+        // → tidak perlu cek sama sekali
         const leaked=await Discount.countDocuments({active:true,valid_until:{$lt:new Date()}});
         if(leaked>0){await Discount.updateMany({active:true,valid_until:{$lt:new Date()}},{$set:{active:false}});log('INFO','SYSTEM',`Health: Auto-fixed ${leaked} diskon expired`);}
         // [FIX] Query duplikat pakai 4-field key sesuai unique index yang ada di DB
