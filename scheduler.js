@@ -530,10 +530,15 @@ async function runNonBuyerCampaign(bot) {
 
     const segment = await classifyNonBuyer(user);
 
-    // [UPGRADE 3] SMART SEGMENTATION
+    // [FIX DISKON] Semua segment dapat diskon — bukan hanya COLD/GHOST!
+    // HOT = baru aktif, kasih diskon kecil sebagai insentif pertama
+    // WARM = sudah kenal produk, kasih diskon medium biar push ke checkout
+    // COLD/GHOST = sudah lama hilang, kasih diskon besar re-engagement
     let discountVal = 0;
-    if (segment === 'COLD') discountVal = 15; // Re-engagement discount
-    else if (segment === 'GHOST') discountVal = 20; // Last effort discount
+    if (segment === 'HOT')   discountVal = 5;  // 5% — gentle nudge
+    else if (segment === 'WARM')  discountVal = 10; // 10% — medium push
+    else if (segment === 'COLD')  discountVal = 15; // 15% — re-engagement
+    else if (segment === 'GHOST') discountVal = 20; // 20% — last effort
 
     // Bangun keyboard dengan diskon dinamis
     const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, discountVal);
@@ -556,62 +561,60 @@ async function runNonBuyerCampaign(bot) {
       msg = customMsg.value.replace(/\{produk\}/g, produkNames);
     } else {
       if (segment === 'HOT') {
-        // [AKSI #5] HOT = baru aktif, gunakan social proof + angka nyata (seperti Stage 2 yang 12.6%)
-        const recentBuyers = await Order.countDocuments({
-          status: 'SUCCESS',
-          created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-        });
-        const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+        const recentBuyers = await Order.countDocuments({ status: 'SUCCESS', created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
+        const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
         const p = prodList[rotationIndex] || prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
         const socialLine = recentBuyers > 0
-          ? `Dalam 24 jam terakhir, <b>${recentBuyers} orang baru masuk</b>. Total <b>${totalBuyers}+ member</b> sudah punya akses penuh.`
+          ? `Dalam 24 jam terakhir, <b>${recentBuyers} orang baru masuk</b>. Total <b>${totalBuyers}+ member</b> sudah punya akses.`
           : `Sudah <b>${totalBuyers}+ member</b> yang punya akses penuh sekarang.`;
+        // [FIX] HOT sekarang dapat diskon 5% — sebutkan di copy!
         msg = isJAV
-          ? `🔑 <b>Akses VIP Tinggal Klik!</b>\n\n` +
+          ? `🔑 <b>Akses VIP + Diskon ${discountVal}% Hari Ini!</b>\n\n` +
             `${socialLine}\n\n` +
             `Yang mereka dapat setiap hari:\n` +
             `🇮🇩 Subtitle Indonesia dibuat tim sendiri — bukan auto-sub\n` +
             `📥 Request video baru langsung via bot\n` +
             `✅ Akses permanen, bayar sekali\n\n` +
-            `<blockquote>Mereka sudah di dalam — kamu bisa masuk sekarang juga dalam 30 detik.</blockquote>\n\n` +
-            `👇 <b>Gabung Sekarang</b>`
-          : `🔑 <b>Akses VIP Tinggal Klik!</b>\n\n` +
+            `<blockquote>Masuk sekarang dengan harga lebih murah ${discountVal}%.</blockquote>\n\n` +
+            `👇 <b>Gabung + Hemat ${discountVal}%</b>`
+          : `🔑 <b>Akses VIP + Diskon ${discountVal}% Hari Ini!</b>\n\n` +
             `${socialLine}\n\n` +
-            `<blockquote>Mereka sudah di dalam — kamu bisa masuk sekarang juga.</blockquote>\n\n` +
-            `👇 <b>Gabung Sekarang</b>`;
+            `<blockquote>Harga hemat ${discountVal}% — berlaku hari ini saja.</blockquote>\n\n` +
+            `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
       } else if (segment === 'WARM') {
-        // WARM = pernah interaksi, butuh proof
-        const totalBuyers = await User.countDocuments({ purchase_count: { $gt: 0 } });
+        const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
         const p = prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
+        // [FIX] WARM sekarang dapat diskon 10% — sebutkan di copy!
         msg = isJAV
-          ? `🌟 <b>Update subtitle baru sudah masuk!</b>\n\n` +
-            `Tim J-SUB baru selesai mengerjakan batch subtitle minggu ini.\n\n` +
-            `<blockquote>Subtitle ini dikerjakan sendiri — bukan auto-sub, bukan repost.</blockquote>\n\n` +
-            `Sudah <b>${totalBuyers}+ member</b> yang bisa nikmatin sekarang. Kamu belum.\n\n` +
-            `👇 <b>Lihat Koleksi Subtitle VIP</b>`
-          : `🔔 <b>Ada yang baru di koleksi VIP!</b>\n\n` +
+          ? `🌟 <b>Subtitle baru masuk + Diskon ${discountVal}% buat kamu!</b>\n\n` +
+            `Tim J-SUB baru selesai batch subtitle minggu ini.\n\n` +
+            `<blockquote>Dibuat sendiri — bukan auto-sub, bukan repost.</blockquote>\n\n` +
+            `Sudah <b>${totalBuyers}+ member</b> yang bisa nikmatin. Kamu bisa masuk dengan harga lebih murah.\n\n` +
+            `🎁 <b>Diskon ${discountVal}% — Klik tombol di bawah untuk pakai</b>\n\n` +
+            `👇 <b>Lihat Koleksi + Hemat ${discountVal}%</b>`
+          : `🔔 <b>Ada yang baru + Diskon ${discountVal}% khusus kamu!</b>\n\n` +
             `Update baru sudah masuk — dan <b>${totalBuyers}+ member</b> sudah bisa akses.\n\n` +
-            `<blockquote>Semakin telat gabung = semakin banyak yang kamu lewati.</blockquote>\n\n` +
-            `👇 <b>Gabung Sekarang</b>`;
+            `Kamu dapat diskon <b>${discountVal}%</b> jika gabung hari ini.\n\n` +
+            `<blockquote>Diskon hangus 48 jam.</blockquote>\n\n` +
+            `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
       } else {
-        // COLD/GHOST = sudah lama tidak aktif, butuh re-engagement + diskon
+        // COLD/GHOST = sudah lama tidak aktif, butuh re-engagement + diskon besar
         const p = prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
         msg = isJAV
           ? `🎁 <b>Diskon ${discountVal}% khusus buat kamu!</b>\n\n` +
-            `Sudah lama tidak mampir. Kami kasih penawaran khusus hari ini.\n\n` +
-            `Tapi sebelum itu, tau nggak sih apa yang bikin J-SUB beda?\n\n` +
+            `Sudah lama tidak mampir. Kami kasih penawaran spesial hari ini.\n\n` +
             `🇮🇩 <b>Subtitle Indonesia dikerjakan sendiri oleh tim J-SUB.</b>\n` +
             `Bukan auto-sub. Bukan repost. Terjemahan manusia.\n\n` +
-            `<blockquote>Koleksi subtitle terus bertambah. Semakin lama kamu tunggu, semakin banyak yang kamu lewati.</blockquote>\n\n` +
+            `<blockquote>Koleksi terus bertambah. Diskon hangus 24 jam.</blockquote>\n\n` +
             `👇 <b>Ambil Diskon ${discountVal}% Sekarang</b>`
           : `🎁 <b>Diskon ${discountVal}% masih berlaku buat kamu!</b>\n\n` +
             `Sudah lama tidak mampir — kami siapkan penawaran spesial.\n\n` +
-            `Akses VIP permanen + koleksi yang terus bertambah, dengan harga lebih murah.\n\n` +
-            `<blockquote>Diskon hangus dalam 24 jam.</blockquote>\n\n` +
-            `👇 <b>Klaim Diskon Sekarang</b>`;
+            `Akses VIP permanen + koleksi terus bertambah, harga lebih murah ${discountVal}%.\n\n` +
+            `<blockquote>Diskon hangus dalam 24 jam. Tidak bisa diperpanjang.</blockquote>\n\n` +
+            `👇 <b>Klaim Diskon ${discountVal}% Sekarang</b>`;
       }
     }
 
@@ -876,8 +879,10 @@ async function runCrossSellCampaign(bot, allProducts) {
 
     const result = await sendSafe(bot, user._id, msg, crossSendOpts);
     if (result.ok) {
-      // Update cooldown agar tidak kirim ulang di cron berikutnya
-      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+      // [FIX COOLDOWN] Update last_broadcast_at — bukan last_active_at!
+      // last_active_at dipakai classifyNonBuyer() untuk segment HOT/WARM/COLD
+      // kalau di-update di sini, buyer yang dapat cross-sell akan selalu jadi HOT
+      await User.findByIdAndUpdate(user._id, { last_broadcast_at: new Date() }).catch(() => {});
 
       const existingDrip = await DripLog.findOne({
         user_id: user._id,
@@ -1067,8 +1072,12 @@ async function runDripFollowUp(bot) {
           `<blockquote>Semakin telat gabung = semakin banyak konten yang kamu lewatin.</blockquote>\n\n` +
           `👇 <b>Gabung Sekarang</b>`;
 
+      // [FIX S2 DISKON] S2 juga dapat diskon kecil (5%) agar tombol terlihat lebih menarik
       let keyboard = null;
-      if (product) keyboard = await buildProductMarkup(user._id, product);
+      if (product) {
+        const s2DiscAmt = Math.floor((product.price || 0) * 0.05); // 5% discount di S2
+        keyboard = await buildProductMarkup(user._id, product, s2DiscAmt);
+      }
 
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S2', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
