@@ -731,10 +731,18 @@ bot.use(async (ctx, next) => {
         updateOp,
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
       ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
+
+      // [REALTIME MARKETING] Trigger ke user SAAT dia aktif — bukan jam 10:00 pagi
+      // Delay 5 detik agar user lihat respons bot dulu, baru dapat marketing
+      // Non-blocking: error di sini tidak crash flow user sama sekali
+      setTimeout(() => {
+        scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
+      }, 5000);
     }
   }
   return next();
 });
+
 
 // Cooldown / Anti-Spam Middleware khusus untuk aksi tombol (Callback Query)
 const clickCooldowns = new Map();

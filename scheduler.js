@@ -2143,6 +2143,118 @@ function stopDailyCron() {
   console.log('[CRON] All scheduled tasks stopped.');
 }
 
+// ─── REALTIME TRIGGER MARKETING ─────────────────────────────────────────────
+// Dipanggil setiap kali user aktif (buka bot, klik tombol, kirim pesan).
+// Ini menggantikan pendekatan "kirim ke semua jam 10:00" dengan pendekatan
+// "kirim ke user SAAT user itu sedang aktif" → diskon tepat sasaran & timing pas.
+
+async function triggerRealtimeMarketing(bot, userId) {
+  try {
+    if (!isMarketingEnabled()) return;
+
+    // 1. Ambil data user
+    const user = await User.findById(userId).lean();
+    if (!user || user.is_blocked) return;
+
+    // 2. Cek apakah user sudah beli (pakai Order, bukan purchase_count)
+    const hasBought = await Order.exists({ user_id: userId, status: 'SUCCESS' });
+    if (hasBought) return; // Buyer tidak dapat non-buyer campaign
+
+    // 3. Cek cooldown 48 jam (pakai last_broadcast_at dari DB — persisten)
+    if (user.last_broadcast_at) {
+      const lastSent = new Date(user.last_broadcast_at).getTime();
+      if (Date.now() - lastSent < CAMPAIGN_COOLDOWN_MS) return; // Masih cooldown
+    }
+
+    // 4. Klasifikasi segment berdasarkan last_active_at
+    const segment = await classifyNonBuyer(user);
+
+    // 5. Tentukan diskon berdasarkan segment
+    let discountVal = 0;
+    if      (segment === 'HOT')   discountVal = 5;
+    else if (segment === 'WARM')  discountVal = 10;
+    else if (segment === 'COLD')  discountVal = 15;
+    else if (segment === 'GHOST') discountVal = 20;
+
+    // 6. Ambil produk aktif & build keyboard
+    const allProducts = await Product.find({ active: 1 }).lean();
+    if (!allProducts.length) return;
+
+    const { keyboard, products: unboughtProducts } = await buildAllProductsKeyboard(userId, allProducts, discountVal);
+    if (!keyboard || !unboughtProducts.length) return; // User sudah beli semua produk
+
+    // 7. Buat diskon di DB jika belum ada (agar berlaku saat checkout)
+    if (discountVal > 0) {
+      const existingDisc = await Discount.findOne({
+        target_user_id: Number(userId),
+        active: true,
+        valid_until: { $gt: new Date() }
+      }).lean();
+      if (!existingDisc) {
+        await Discount.create({
+          target_user_id: Number(userId),
+          target_product_id: null,
+          type: 'PERCENTAGE',
+          value: discountVal,
+          // Expire 48 jam — cukup untuk user yang balik besok
+          valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000),
+          active: true
+        });
+      }
+    }
+
+    // 8. Buat pesan berdasarkan segment — ringkas, personal, langsung ke point
+    const name = user.first_name || 'Bos';
+    const p = unboughtProducts[0];
+    const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
+    let msg;
+
+    if (segment === 'HOT') {
+      msg = `👋 <b>${name}!</b>\n\n` +
+            `Ada <b>${totalBuyers}+ member</b> yang sudah di dalam.\n\n` +
+            `Hari ini kamu dapat <b>diskon ${discountVal}%</b> — tinggal klik tombol di bawah.\n\n` +
+            `<blockquote>Diskon berlaku 48 jam dari sekarang.</blockquote>`;
+    } else if (segment === 'WARM') {
+      msg = `🔔 <b>${name}, ada penawaran buat kamu!</b>\n\n` +
+            `Kamu belum sempat gabung — kami kasih <b>diskon ${discountVal}%</b> hari ini.\n\n` +
+            `Sudah <b>${totalBuyers}+ member</b> yang aktif.\n\n` +
+            `<blockquote>Diskon berlaku 48 jam — tidak bisa diperpanjang.</blockquote>`;
+    } else if (segment === 'COLD') {
+      msg = `🎁 <b>Selamat datang kembali, ${name}!</b>\n\n` +
+            `Sudah lama tidak mampir — ada <b>diskon ${discountVal}%</b> khusus buat kamu.\n\n` +
+            `<blockquote>Penawaran ini hanya berlaku 48 jam dari sekarang.</blockquote>`;
+    } else { // GHOST
+      msg = `🎁 <b>${name}, masih ingat kami?</b>\n\n` +
+            `Kami siapkan <b>diskon ${discountVal}%</b> — penawaran terbesar yang pernah kami kasih.\n\n` +
+            `<blockquote>Ini penawaran terakhir — berlaku 48 jam saja.</blockquote>`;
+    }
+
+    // 9. Kirim via sendSafe (sudah handle blocked, cooldown, logging)
+    const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+    const hType = await getSetting('header_type', 'url');
+    const firstProd = unboughtProducts[0];
+    const media = firstProd?.promo_image_id || hFile;
+    const mediaType = firstProd?.promo_image_id ? (firstProd.promo_media_type || 'photo') : hType;
+
+    const result = await sendSafe(bot, userId, msg, {
+      media,
+      mediaType,
+      keyboard,
+      campaign: `RT_${segment}`, // RT = RealTime, beda dari cron campaign
+      userName: name,
+      reason: unboughtProducts.map(p => p.name).join(', ')
+    });
+
+    if (result.ok) {
+      logger.info(`[RT-MARKETING] Terkirim ke ${userId} (${name}) segment=${segment} diskon=${discountVal}%`);
+    }
+
+  } catch (err) {
+    // Silent fail — jangan sampai crash user experience karena marketing
+    logger.warn(`[RT-MARKETING] Error untuk userId=${userId}: ${err.message}`);
+  }
+}
+
 module.exports = {
   startCron,
   runMarketingCampaign,
@@ -2150,5 +2262,7 @@ module.exports = {
   markDripConverted,
   setMarketingEnabled,
   isMarketingEnabled,
-  stopDailyCron
+  stopDailyCron,
+  triggerRealtimeMarketing   // ← export baru
 };
+
