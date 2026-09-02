@@ -288,14 +288,28 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     let deliveries = await store.fulfillOrder(orderId);
     
     // [FIX KRITIS] Jika deliveries kosong (item sudah di-fulfill sebelumnya tapi
-    // pesan gagal terkirim ke user), ambil konten stok langsung dari DB
-    // Ini mencegah user bayar tapi tidak dapat link sama sekali!
+    // pesan gagal terkirim ke user), recover konten dari DB dengan 3 jalur:
+    // 1) stock_id di OrderItem (tersedia sejak fix BUG#6)
+    // 2) cari di stocks via order_id
+    // 3) fallback ke stok apapun untuk produk tersebut
     if (deliveries.length === 0) {
-      logger.warn(`[PAYMENT] fulfillOrder kembalikan array kosong untuk ${orderId} — ambil dari stok DB`);
+      logger.warn(`[PAYMENT] fulfillOrder kembalikan array kosong untuk ${orderId} — recovery dari stok DB`);
       const { Stock, OrderItem } = require('./database');
       const existingItems = await OrderItem.find({ order_id: orderId }).lean();
       for (const it of existingItems) {
-        const stk = await Stock.findOne({ order_id: orderId, product_id: it.product_id }).lean();
+        let stk = null;
+        // Jalur 1: pakai stock_id jika ada (fix terbaru)
+        if (it.stock_id) {
+          stk = await Stock.findById(it.stock_id).lean();
+        }
+        // Jalur 2: cari via order_id di stok
+        if (!stk) {
+          stk = await Stock.findOne({ order_id: orderId, product_id: it.product_id }).lean();
+        }
+        // Jalur 3: ambil stok manapun untuk produk ini (unlimited digital)
+        if (!stk) {
+          stk = await Stock.findOne({ product_id: it.product_id, content: { $exists: true, $ne: '' } }).lean();
+        }
         if (stk && stk.content) {
           deliveries.push({ product_id: it.product_id, content: stk.content });
         }

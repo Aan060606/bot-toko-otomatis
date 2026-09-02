@@ -111,7 +111,8 @@ async function fulfillOrder(orderId) {
         // Stok AVAILABLE berhasil diklaim — catat untuk audit trail
         deliveredStocks.push({
           product_id: item.product_id,
-          content: stock.content
+          content: stock.content,
+          stock_id: stock._id  // [FIX BUG#6] simpan stock_id untuk recovery
         });
 
         // [PRODUK DIGITAL UNLIMITED] Queue untuk restock setelah loop selesai
@@ -125,7 +126,8 @@ async function fulfillOrder(orderId) {
           // Ada stok dari ORDER LAIN (unlimited digital) — GUNAKAN kontennya untuk delivery
           deliveredStocks.push({
             product_id: item.product_id,
-            content: anyStock.content
+            content: anyStock.content,
+            stock_id: anyStock._id  // [FIX BUG#6]
           });
           // Queue untuk restock agar pembeli BERIKUTNYA juga bisa dapat
           restockQueue.push({ product_id: item.product_id, content: anyStock.content });
@@ -136,7 +138,8 @@ async function fulfillOrder(orderId) {
           // Kedua kasus → tampilkan "Habis stok"
           deliveredStocks.push({
             product_id: item.product_id,
-            content: '⚠️ Habis stok. Hubungi Admin untuk mendapat akses.'
+            content: '⚠️ Habis stok. Hubungi Admin untuk mendapat akses.',
+            stock_id: anyStock ? anyStock._id : null  // [FIX BUG#6]
           });
           // Jika ada anyStock (dari order ini), tetap queue untuk restock pembeli berikutnya
           if (anyStock) {
@@ -153,7 +156,9 @@ async function fulfillOrder(orderId) {
       await Stock.create({ product_id: r.product_id, content: r.content, status: 'AVAILABLE' });
     }
     
-    await OrderItem.findByIdAndUpdate(item._id, { $set: { fulfilled: 1 } });
+    // [FIX BUG#6] Simpan stock_id ke OrderItem agar recovery tidak bergantung pada order_id
+    const stockIdForItem = deliveredStocks.find(d => d.product_id === item.product_id)?.stock_id || null;
+    await OrderItem.findByIdAndUpdate(item._id, { $set: { fulfilled: 1, stock_id: stockIdForItem } });
   }
   // NOTE: Status 'SUCCESS' sudah di-set secara atomik di onPaymentSuccess() index.js
   // menggunakan findOneAndUpdate dengan kondisi { status: 'PENDING' } sebagai idempotency guard.
