@@ -928,15 +928,36 @@ async function runDripFollowUp(bot) {
   const stats = { stage2: 0, stage3: 0, skipped: 0, failed: 0 };
   const now = new Date();
 
+  // [FIX BUG#2] Reset sentInThisRun di awal SETIAP panggilan runDripFollowUp
+  // Sebelumnya hanya di-clear di runMarketingCampaign — saat drip-only path (baris 1769)
+  // dipanggil, set masih berisi userId dari run sebelumnya → semua drip di-skip!
+  sentInThisRun.clear();
+
   // === HARD CAP 90 HARI: Tutup funnel diam-diam jika macet terlalu lama ===
   const ninetyDaysAgo = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
+  const sevenDaysAgo  = new Date(now.getTime() - (7  * 24 * 60 * 60 * 1000));
   try {
     await DripLog.updateMany(
       { converted: false, created_at: { $lte: ninetyDaysAgo } },
       { $set: { converted: true, exited_reason: 'TIMEOUT' } }
     );
+    // [FIX BUG#7] Cleanup stage=0 yang stuck >7 hari (cart abandon tidak ada yang kembali)
+    await DripLog.updateMany(
+      { stage: 0, converted: false, sent_at: { $lte: sevenDaysAgo } },
+      { $set: { converted: true, exited_reason: 'STUCK_STAGE0' } }
+    );
+    // [FIX BUG#1] Pastikan semua drip buyer ter-mark converted (safety net)
+    const buyerUserIds = await Order.distinct('user_id', { status: 'SUCCESS' });
+    if (buyerUserIds.length > 0) {
+      const buyerDripFixed = await DripLog.updateMany(
+        { user_id: { $in: buyerUserIds }, converted: false },
+        { $set: { converted: true, exited_reason: 'BUYER_CLEANUP' } }
+      );
+      if (buyerDripFixed.modifiedCount > 0)
+        console.log(`[DRIP] Cleanup buyer drip: ${buyerDripFixed.modifiedCount} logs dimark converted`);
+    }
   } catch (err) {
-    console.error('[DRIP] Gagal eksekusi 90-day hard cap:', err);
+    console.error('[DRIP] Gagal eksekusi cleanup:', err);
   }
 
 
@@ -1615,7 +1636,9 @@ async function runCartAbandonCampaign(bot) {
     const hType = await getSetting('header_type', 'url');
     const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
     
-    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'FLASH_SALE', userName: user.first_name || '?', reason: 'flash_sale_trigger' });
+    // [FIX BUG#4] Campaign label harus 'CART_ABANDON' bukan 'FLASH_SALE'
+    // sendSafe() akan update last_broadcast_at — cooldown aktif setelah ini
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'CART_ABANDON', userName: user.first_name || '?', reason: drip.product_id || 'cart_abandon' });
     if (result.ok) {
       // Update DripLog stage 0 → stage yang dikirim (bukan buat baru, cegah duplikat)
       await DripLog.findByIdAndUpdate(drip._id, {
@@ -1625,7 +1648,12 @@ async function runCartAbandonCampaign(bot) {
       if (stage === 1) stats.sent1h++;
       if (stage === 2) stats.sent3h++;
       if (stage === 3) stats.sent12h++;
-      await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
+      // [FIX BUG#4] Update last_broadcast_at via native driver — bukan last_active_at!
+      // Ini yang menyebabkan cooldown tidak bekerja untuk cart abandon campaign
+      try {
+        const db = User.db.db;
+        await db.collection('users').updateOne({ _id: Number(user._id) }, { $set: { last_broadcast_at: new Date() } });
+      } catch (_) {}
     } else {
       stats.skipped++;
     }
