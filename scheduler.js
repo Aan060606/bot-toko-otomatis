@@ -228,7 +228,18 @@ async function sendSafe(bot, userId, text, options = {}) {
       await bot.telegram.sendMessage(userId, text, extra);
     }
     
-    await User.findByIdAndUpdate(userId, { last_broadcast_at: new Date() });
+    // [FIX KRITIS] Gunakan native driver — findByIdAndUpdate(userId) dengan _id=Number
+    // sering silent fail di Mongoose → last_broadcast_at tidak tersimpan
+    // → cooldown tidak bekerja → user bisa dapat double marketing (RT + cron)!
+    try {
+      const db = User.db.db;
+      await db.collection('users').updateOne(
+        { _id: Number(userId) },
+        { $set: { last_broadcast_at: new Date() } }
+      );
+    } catch (_) {
+      await User.updateOne({ _id: userId }, { $set: { last_broadcast_at: new Date() } }).catch(() => {});
+    }
     sentInThisRun.add(String(userId)); // [FIX SPAM] Tandai user sudah dikirim di run ini
     logger.marketing.sent(userId, options.userName || '?', options.campaign || 'UNKNOWN', options.reason || '-');
     return { ok: true };
