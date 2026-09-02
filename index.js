@@ -285,17 +285,39 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
       return;
     }
 
-    const deliveries = await store.fulfillOrder(orderId);
+    let deliveries = await store.fulfillOrder(orderId);
+    
+    // [FIX KRITIS] Jika deliveries kosong (item sudah di-fulfill sebelumnya tapi
+    // pesan gagal terkirim ke user), ambil konten stok langsung dari DB
+    // Ini mencegah user bayar tapi tidak dapat link sama sekali!
+    if (deliveries.length === 0) {
+      logger.warn(`[PAYMENT] fulfillOrder kembalikan array kosong untuk ${orderId} — ambil dari stok DB`);
+      const { Stock, OrderItem } = require('./database');
+      const existingItems = await OrderItem.find({ order_id: orderId }).lean();
+      for (const it of existingItems) {
+        const stk = await Stock.findOne({ order_id: orderId, product_id: it.product_id }).lean();
+        if (stk && stk.content) {
+          deliveries.push({ product_id: it.product_id, content: stk.content });
+        }
+      }
+      if (deliveries.length === 0) {
+        logger.error(`[PAYMENT] KRITIS: Tidak ada stok ditemukan untuk order ${orderId} — kirim pesan darurat ke user`);
+      }
+    }
+    
     const boughtProdIds = deliveries.map(d => d.product_id).filter(Boolean);
     await scheduler.markDripConverted(chatId, updatedOrder.total_amount, boughtProdIds);
 
     // Pesan sukses — hype, bukan hanya kirim link
     let deliveryText = `🎉 <b>AKSES VIP KAMU AKTIF!</b>\n\n`;
     deliveryText += `Selamat bergabung! Kamu sekarang punya akses ke konten eksklusif yang dicari banyak orang.\n\n`;
+    if (deliveries.length === 0) {
+      deliveryText += `⚠️ <b>Link sedang diproses.</b>\nAdmin akan segera kirimkan link akses dalam beberapa menit.\n\n`;
+    }
     deliveries.forEach((d, i) => {
-      if (d.content.trim().startsWith('http')) {
+      if (d.content && d.content.trim().startsWith('http')) {
         deliveryText += `🔑 <b>Link Akses #${i+1}:</b>\n👉 <a href="${d.content.trim()}">KLIK DI SINI UNTUK MASUK GRUP VIP</a> 👈\n\n`;
-      } else {
+      } else if (d.content) {
         deliveryText += `🔑 <b>Akses #${i+1}:</b>\n<code>${d.content}</code>\n\n`;
       }
     });
@@ -433,7 +455,8 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
                   await ctx.telegram.sendMessage(nb._id, msg, { parse_mode: 'HTML', ...keyboard });
                 }
               } catch(e) {}
-              await User.findByIdAndUpdate(nb._id, { last_broadcast_at: new Date() }).catch(() => {}); // Set cooldown 24 jam
+              // [FIX] Gunakan native driver untuk cooldown — Mongoose silent fail pada Number _id
+              try { await User.db.db.collection('users').updateOne({ _id: Number(nb._id) }, { $set: { last_broadcast_at: new Date() } }); } catch(_) {}
               await new Promise(r => setTimeout(r, 1000));
             }
           }
