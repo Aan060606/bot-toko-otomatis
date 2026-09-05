@@ -2164,13 +2164,26 @@ function startCron(bot) {
   // Solusi: startup hanya jalankan sub-tugas yang aman di-run berulang (drip + cart).
   console.log('[CRON] 🚀 Marketing Scheduler (node-cron) started. Dijadwalkan jam 10:00 WIB setiap hari.');
   console.log('[CRON] Startup: hanya drip follow-up & cart abandon (bukan campaign utama).');
-  Promise.all([
-    runDripFollowUp(bot),
-    runCartAbandonCampaign(bot),
-    runPostPurchaseFollowUp(bot)
-  ])
-    .then(() => console.log('[CRON] ✅ Startup drip selesai.'))
-    .catch(err => console.error('[CRON] ❌ Startup drip gagal:', err.message));
+
+  // [FIX 409-LOOP] Debounce startup drip: jangan jalankan jika ada flag startup terbaru
+  // Saat 409 loop terjadi, bot restart puluhan kali dalam beberapa menit
+  // → runDripFollowUp jalan puluhan kali → recycle Stage 4 berulang → spam ke user!
+  // Solusi: tandai timestamp startup. Jika startup terlalu sering (< 5 menit), skip drip.
+  const now = Date.now();
+  const STARTUP_DEBOUNCE_MS = 5 * 60 * 1000; // 5 menit
+  if (global._lastStartupDrip && (now - global._lastStartupDrip) < STARTUP_DEBOUNCE_MS) {
+    const secsAgo = Math.floor((now - global._lastStartupDrip) / 1000);
+    console.log(`[CRON] ⏭️  Startup drip diskip — restart terlalu cepat (${secsAgo}s lalu). Tunggu 5 menit antar restart.`);
+  } else {
+    global._lastStartupDrip = now;
+    Promise.all([
+      runDripFollowUp(bot),
+      runCartAbandonCampaign(bot),
+      runPostPurchaseFollowUp(bot)
+    ])
+      .then(() => console.log('[CRON] ✅ Startup drip selesai.'))
+      .catch(err => console.error('[CRON] ❌ Startup drip gagal:', err.message));
+  }
 }
 
 
