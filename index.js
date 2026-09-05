@@ -2898,36 +2898,37 @@ if (process.env.NODE_ENV !== "test") {
     }
   })();
 
-  // [FIX 409] Hapus webhook dulu sebelum launch polling
-  // Jika webhook aktif (dari sisi Telegram), polling akan dapat 409
-  try {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    logger.info('[BOT] Webhook dihapus, mulai polling mode...');
-  } catch (e) {
-    logger.warn('[BOT] Gagal hapus webhook (mungkin tidak ada):', e.message);
-  }
+  // [FIX 409] Hapus webhook + launch polling dalam async context
+  (async () => {
+    // Hapus webhook dulu sebelum launch polling
+    try {
+      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+      logger.info('[BOT] Webhook dihapus, mulai polling mode...');
+    } catch (e) {
+      logger.warn('[BOT] Gagal hapus webhook:', e.message);
+    }
 
-  // Tunggu 3 detik sebelum launch agar instance lama sempat mati
-  await new Promise(r => setTimeout(r, 3000));
+    // Tunggu 3 detik agar instance lama sempat terminasi
+    await new Promise(r => setTimeout(r, 3000));
 
-  scheduler.startCron(bot);
-  bot.launch({ dropPendingUpdates: true })
-    .then(() => {
-      logger.success("Bot Toko Otomatis berjalan!");
-      resumePendingOrders();
-    })
-    .catch(async (err) => {
-      if (err.message && err.message.includes('409')) {
-        logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 15 detik lalu restart...");
-        // [FIX] Tunggu 15 detik agar instance lama benar-benar mati
-        // Sebelumnya: langsung exit → Coolify restart → 409 lagi → loop!
-        await new Promise(r => setTimeout(r, 15000));
-        process.exit(1);
-      } else {
-        logger.error("Gagal menjalankan bot:", err.message);
-        process.exit(1);
-      }
-    });
+    scheduler.startCron(bot);
+    bot.launch({ dropPendingUpdates: true })
+      .then(() => {
+        logger.success("Bot Toko Otomatis berjalan!");
+        resumePendingOrders();
+      })
+      .catch(async (err) => {
+        if (err.message && err.message.includes('409')) {
+          logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 15 detik lalu restart...");
+          // [FIX] Tunggu 15 detik agar instance lama benar-benar mati sebelum Coolify restart
+          await new Promise(r => setTimeout(r, 15000));
+          process.exit(1);
+        } else {
+          logger.error("Gagal menjalankan bot:", err.message);
+          process.exit(1);
+        }
+      });
+  })();
 
   const http = require("http");
   const PORT = process.env.PORT || 3000;
