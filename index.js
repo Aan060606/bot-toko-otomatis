@@ -277,12 +277,32 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
   try {
     const updatedOrder = await Order.findOneAndUpdate(
       { _id: orderId, status: 'PENDING' },
-      { $set: { status: 'SUCCESS', success_processed_at: new Date() } }
+      { $set: { status: 'SUCCESS', success_processed_at: new Date() } },
+      { returnDocument: 'after' }
     );
-    
+
+    // [FIX KRITIS] Idempotency guard yang lebih cerdas:
+    // Sebelumnya: jika order bukan PENDING (misal sudah SUCCESS via polling), langsung return
+    // Akibat: webhook fire SETELAH polling set status=SUCCESS → guard return → link tidak terkirim!
+    // Sekarang: cek apakah item sudah fulfilled. Jika belum → tetap lanjut delivery.
+    let orderToProcess = updatedOrder;
     if (!updatedOrder) {
-      logger.warn(`[IDEMPOTENT] Order ${orderId} sudah diproses. Skip.`);
-      return;
+      // Order sudah SUCCESS — cek apakah item sudah fulfilled
+      const existingOrder = await Order.findById(orderId).lean();
+      if (!existingOrder || existingOrder.status !== 'SUCCESS') {
+        logger.warn(`[IDEMPOTENT] Order ${orderId} tidak ditemukan atau status bukan SUCCESS. Skip.`);
+        return;
+      }
+      const { OrderItem } = require('./database');
+      const existingItem = await OrderItem.findOne({ order_id: orderId }).lean();
+      if (existingItem && existingItem.fulfilled) {
+        // Sudah fulfilled — berarti link sudah pernah dikirim sebelumnya. Skip.
+        logger.warn(`[IDEMPOTENT] Order ${orderId} sudah fulfilled. Skip.`);
+        return;
+      }
+      // Order SUCCESS tapi item BELUM fulfilled → lanjut delivery!
+      logger.warn(`[IDEMPOTENT] Order ${orderId} sudah SUCCESS tapi belum fulfilled — lanjut delivery.`);
+      orderToProcess = existingOrder;
     }
 
     let deliveries = await store.fulfillOrder(orderId);
@@ -320,7 +340,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     }
     
     const boughtProdIds = deliveries.map(d => d.product_id).filter(Boolean);
-    await scheduler.markDripConverted(chatId, updatedOrder.total_amount, boughtProdIds);
+    await scheduler.markDripConverted(chatId, orderToProcess.total_amount, boughtProdIds);
 
     // Pesan sukses — hype, bukan hanya kirim link
     let deliveryText = `🎉 <b>AKSES VIP KAMU AKTIF!</b>\n\n`;
@@ -382,7 +402,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     // Log payment
     const buyerName = (await User.findById(chatId).lean())?.first_name || 'Unknown';
     const order2 = await Order.findById(orderId).lean();
-    const finalAmount = order2?.total_amount || updatedOrder.total_amount || 0;
+    const finalAmount = order2?.total_amount || orderToProcess.total_amount || 0;
     logger.payment.success(orderId, chatId, finalAmount, 'poll');
     logger.payment.delivered(orderId, chatId, deliveries.length);
     if (buyerName !== 'Unknown') {
