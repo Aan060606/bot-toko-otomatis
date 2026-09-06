@@ -935,8 +935,9 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
 // ─── CAMPAIGN 3: DRIP FOLLOW-UP (BERTINGKAT) ───────────────────────────────
 
 async function runDripFollowUp(bot) {
-  const stats = { stage2: 0, stage3: 0, skipped: 0, failed: 0 };
+  const stats = { complete: 0, sent: 0, skipped: 0, failed: 0 };
   const now = new Date();
+  const sentThisExecution = new Set(); // [FIX BUG#2] Intra-cron deduplication
 
   // [FIX BUG#2] Reset sentInThisRun di awal SETIAP panggilan runDripFollowUp
   // Sebelumnya hanya di-clear di runMarketingCampaign — saat drip-only path (baris 1769)
@@ -1059,6 +1060,7 @@ async function runDripFollowUp(bot) {
 
       // [FIX SPAM] Cek cooldown — max 1 drip per user per hari (walau punya banyak produk)
       if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
@@ -1126,6 +1128,7 @@ async function runDripFollowUp(bot) {
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
         stats.stage2++;
+        sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
         stats.failed++;
@@ -1159,6 +1162,7 @@ async function runDripFollowUp(bot) {
       }
       // [FIX SPAM] Max 1 drip per user per hari
       if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
@@ -1221,6 +1225,7 @@ async function runDripFollowUp(bot) {
           });
         }
         stats.stage3++;
+        sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
         stats.failed++;
@@ -1250,6 +1255,7 @@ async function runDripFollowUp(bot) {
       }
       // [FIX SPAM] Max 1 drip per user per hari
       if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       const product = await Product.findById(log.product_id).lean();
       if (!product) {
@@ -1284,6 +1290,7 @@ async function runDripFollowUp(bot) {
           valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
         });
         stats.stage4 = (stats.stage4 || 0) + 1;
+        sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
         stats.failed++;
@@ -1337,8 +1344,9 @@ async function runDripFollowUp(bot) {
 // Stage 2 (3 hari): tips penggunaan + minta review
 // Stage 3 (7 hari): cross-sell produk lain + diskon 10%
 async function runPostPurchaseFollowUp(bot) {
-  const stats = { stage2: 0, stage3: 0, skipped: 0 };
+  const stats = { complete: 0, sent: 0, skipped: 0 };
   const now   = new Date();
+  const sentThisExecution = new Set();
   const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
   const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
   const allProducts  = await Product.find({ active: 1 }).lean();
@@ -1356,6 +1364,7 @@ async function runPostPurchaseFollowUp(bot) {
   for (const log of ppStage1) {
     const user = await User.findById(log.user_id).lean();
     if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
     const product = await Product.findById(log.product_id).lean();
     const name    = user.first_name || 'Bos';
@@ -1385,6 +1394,7 @@ async function runPostPurchaseFollowUp(bot) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
       await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
       stats.stage2++;
+      sentThisExecution.add(String(user._id));
     } else { stats.skipped++; }
     await delay(1500);
   }
@@ -1400,6 +1410,7 @@ async function runPostPurchaseFollowUp(bot) {
   for (const log of ppStage2) {
     const user = await User.findById(log.user_id).lean();
     if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
     const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, arguments[3], arguments[4]); // arguments[3] = globalTop, arguments[4] = simMap
     if (!nextProduct) {
@@ -1437,6 +1448,7 @@ async function runPostPurchaseFollowUp(bot) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 3, converted: true, exited_reason: 'POST_PURCHASE_COMPLETE' });
       await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
       stats.stage3++;
+      sentThisExecution.add(String(user._id));
     } else { stats.skipped++; }
     await delay(1500);
   }
@@ -1453,6 +1465,7 @@ async function runPostPurchaseFollowUp(bot) {
   for (const log of ppStage3Done) {
     const user = await User.findById(log.user_id).lean();
     if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
     const boughtIds = await getBoughtProductIds(user._id);
     const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, arguments[3], arguments[4]);
@@ -1490,6 +1503,7 @@ async function runPostPurchaseFollowUp(bot) {
     if (result2.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
       stats.stage4 = (stats.stage4 || 0) + 1;
+      sentThisExecution.add(String(user._id));
     } else { stats.skipped++; }
     await delay(1500);
   }
