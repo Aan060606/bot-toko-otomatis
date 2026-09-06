@@ -36,6 +36,25 @@ let lastCronDate = null; // Still used for manual/startup run guard
 
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
+// [FIX] Mencegah spam jam 2 pagi tanpa mematikan fitur cron per jam.
+function isUserQuietHour(user) {
+  const currentHour = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Jakarta'})).getHours();
+  // Jam tenang: 00:00 sampai 06:00 pagi
+  if (currentHour >= 0 && currentHour <= 6) {
+    if (!user.last_active_at) return true; // Asumsikan tidur jika tidak ada data
+    
+    // Cek jam kebiasaan user aktif
+    const userActiveHour = parseInt(new Date(user.last_active_at).toLocaleString('en-US',{timeZone:'Asia/Jakarta',hour:'numeric',hour12:false}));
+    
+    // Jika user memang kalong (biasa aktif di jam tenang), tetap kirim!
+    if (userActiveHour >= 0 && userActiveHour <= 6) {
+      return false; 
+    }
+    return true; // Normal user, biarkan dia tidur, skip kirim.
+  }
+  return false;
+}
+
 async function getSetting(key, defaultVal) {
   const row = await Setting.findById(key).lean();
   return row ? row.value : defaultVal;
@@ -526,6 +545,7 @@ async function runNonBuyerCampaign(bot) {
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
   for (const user of nonBuyers) {
+    if (isUserQuietHour(user)) { stats.skipped++; continue; }
     if (isInCooldown(user)) { stats.skipped++; continue; }
 
     // [FIX] Cek semua produk, skip hanya jika SEMUA produk sudah ada drip aktif
@@ -1308,6 +1328,7 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'CLEANUP' });
         continue;
       }
+      if (isUserQuietHour(user)) { stats.skipped++; continue; }
 
       // Reset user ke stage 0 agar masuk pipeline dari awal lagi!
       // Kita set sent_at ke 'now' supaya besok baru dikirim stage 1-nya
@@ -1349,7 +1370,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage1) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
 
     const product = await Product.findById(log.product_id).lean();
     const name    = user.first_name || 'Bos';
@@ -1393,7 +1414,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage2) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
 
     const boughtIds  = await getBoughtProductIds(user._id);
     const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
@@ -1447,7 +1468,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage3Done) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
 
 
     const boughtIds   = await getBoughtProductIds(user._id);
@@ -1730,6 +1751,7 @@ async function runFlashSaleCampaign(bot, allProducts) {
   await CronProgress.create({ date: progressKey, campaign: 'COMPLETED', completed: true, created_at: new Date() });
 
   for (const user of users) {
+    if (isUserQuietHour(user)) { stats.skipped++; continue; }
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'VIP_WINBACK', userName: user.first_name || '?', reason: 'winback' });
     if (result.ok) {
       stats.sent++;
@@ -1962,7 +1984,7 @@ async function runVIPWinBackCampaign(bot) {
   }).lean();
 
   for (const user of vips) {
-    if (isInCooldown(user)) continue;
+    if (isUserQuietHour(user) || isInCooldown(user)) continue;
     
     // [FIX] Ganti Markdown (*bold*) ke HTML (<b>bold</b>) — sendSafe pakai parse_mode HTML
     const msg =
@@ -2019,10 +2041,10 @@ function startCron(bot) {
   cronTasks = [];
 
   // ── TASK 1: Marketing Campaign — Setiap hari jam 10:00 WIB ─────────────────
-  // [FIX BUG#1] Sebelumnya '0 * * * *' (setiap jam) → jam 02:00 WIB yang menyebabkan
-  // 32 user langsung block bot sekaligus karena notif dini hari.
-  // Sekarang hanya jalan 1x sehari jam 10:00 WIB.
-  const marketingTask = cron.schedule('0 10 * * *', async () => {
+  // [FIX BUG#1] Dikembalikan menjadi '0 * * * *' (setiap jam) agar Cart Abandon
+  // bisa berjalan sesuai stage 1 jam dan 3 jam.
+  // SPAM malam hari ditangani secara individual melalui fungsi isUserQuietHour().
+  const marketingTask = cron.schedule('0 * * * *', async () => {
     if (!marketingEnabled) return;
     const now = new Date();
     const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
