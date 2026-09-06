@@ -759,7 +759,7 @@ bot.use(async (ctx, next) => {
     const now = Date.now();
     const lastUpdate = activeUsersCache.get(userId) || 0;
 
-    // UPDATE DATABASE MAKSIMAL 1 KALI PER 1 HARI (24 Jam) per user
+    // Update DB maksimal 1x per 24 jam (hemat query)
     if (now - lastUpdate > 24 * 60 * 60 * 1000) {
       activeUsersCache.set(userId, now);
 
@@ -775,27 +775,27 @@ bot.use(async (ctx, next) => {
           is_blocked: false
         }
       };
-      
+
       // Jika lewat link referral/start payload
       if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start ')) {
         const payload = ctx.message.text.split(' ')[1];
         updateOp.$setOnInsert.source_ref = payload;
       }
 
-      // Jalankan tanpa harus menunggu (non-blocking) agar bot merespon lebih cepat
       User.findByIdAndUpdate(
         userId,
         updateOp,
         { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
       ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
-
-      // [REALTIME MARKETING] Trigger ke user SAAT dia aktif — bukan jam 10:00 pagi
-      // Delay 5 detik agar user lihat respons bot dulu, baru dapat marketing
-      // Non-blocking: error di sini tidak crash flow user sama sekali
-      setTimeout(() => {
-        scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
-      }, 5000);
     }
+
+    // [REALTIME MARKETING] Trigger SETIAP user aktif — bukan jam 10:00 pagi
+    // Cooldown 48 jam dihandle di dalam triggerRealtimeMarketing (cek last_broadcast_at)
+    // Jadi aman dipanggil setiap user kirim pesan — tidak akan spam
+    // Delay 5 detik: user baca respons bot dulu, baru dapat marketing
+    setTimeout(() => {
+      scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
+    }, 5000);
   }
   return next();
 });
