@@ -2165,6 +2165,8 @@ async function getCampaignMetrics() {
   return msg;
 }
 
+let isMarketingRunning = false;
+
 function startCron(bot) {
   // Bersihkan semua task lama (anti-duplikasi)
   cronTasks.forEach(t => t.destroy());
@@ -2176,6 +2178,12 @@ function startCron(bot) {
   // SPAM malam hari ditangani secara individual melalui fungsi isUserQuietHour().
   const marketingTask = cron.schedule('0 * * * *', async () => {
     if (!marketingEnabled) return;
+    if (isMarketingRunning) {
+      console.log(`[CRON] ⚠️ Skip: Marketing campaign sebelumnya belum selesai (kemungkinan tertunda Queue limit).`);
+      return;
+    }
+    isMarketingRunning = true;
+
     const now = new Date();
     const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
     const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}-${String(jakartaDate.getHours()).padStart(2,'0')}`;
@@ -2185,6 +2193,8 @@ function startCron(bot) {
       console.log('[CRON] ✅ Marketing selesai. Stats:', JSON.stringify(stats));
     } catch (err) {
       console.error('[CRON] ❌ Gagal menjalankan marketing:', err.message);
+    } finally {
+      isMarketingRunning = false;
     }
   }, { timezone: 'Asia/Jakarta' });
 
