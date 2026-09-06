@@ -297,7 +297,14 @@ function isInCooldown(user, { bypassForBuyer = false, overrideCooldownMs = null,
   
   // Jika campaign yang akan dikirim SAMA (atau dalam grup funnel yang sama) dengan campaign sebelumnya,
   // skip cooldown lintas-funnel (misal progresi internal funnel Cart Abandon stage 1 -> stage 2)
-  if (currentCampaign && user.last_promo_campaign && user.last_promo_campaign.startsWith(currentCampaign)) return false;
+  if (currentCampaign && user.last_promo_campaign && user.last_promo_campaign.startsWith(currentCampaign)) {
+    // [FIX BUG#2] Guard 5 menit: Jangan bypass jika pesan terakhir baru saja terkirim beberapa menit/detik lalu.
+    // Ini mencegah spam beruntun dalam 1 kali run cron akibat loop multi-produk.
+    const MIN_BYPASS_AGE_MS = 5 * 60 * 1000;
+    if (!user.last_broadcast_at || (new Date() - new Date(user.last_broadcast_at)) >= MIN_BYPASS_AGE_MS) {
+      return false;
+    }
+  }
   
   const cooldownLimit = overrideCooldownMs !== null ? overrideCooldownMs : CAMPAIGN_COOLDOWN_MS;
   
@@ -1869,7 +1876,8 @@ async function runMarketingCampaign(bot, todayStr) {
       // Sudah selesai hari ini — Drip tetap jalan tiap jam, campaign utama skip
       console.log('[CRON] Campaign utama sudah selesai hari ini. Menjalankan recurring hourly campaigns...');
       // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
-      await runCartAbandonCampaign(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam (Prioritas 1)
+      await runCartAbandonCampaign,
+  runDripFollowUp(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam (Prioritas 1)
       await runPostPurchaseFollowUp(bot); // [W9] Post-purchase jalan tiap jam (Prioritas 2)
       await runDripFollowUp(bot);         // Drip Follow up (Prioritas 3)
       return { skipped: false, drip_only: true };
@@ -1879,7 +1887,8 @@ async function runMarketingCampaign(bot, todayStr) {
   if (progress.campaign === 'START') {
     // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
     console.log('[MARKETING] Campaign 5: Cart Abandon Hyper-Recovery...');
-    cartAbandonStats = await runCartAbandonCampaign(bot); // Prioritas 1
+    cartAbandonStats = await runCartAbandonCampaign,
+  runDripFollowUp(bot); // Prioritas 1
     console.log('[MARKETING] Campaign 4: Post-Purchase Follow-Up...');
     await runPostPurchaseFollowUp(bot);                   // Prioritas 2
     console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
@@ -2254,7 +2263,8 @@ function startCron(bot) {
     global._lastStartupDrip = now;
     Promise.all([
       runDripFollowUp(bot),
-      runCartAbandonCampaign(bot),
+      runCartAbandonCampaign,
+  runDripFollowUp(bot),
       runPostPurchaseFollowUp(bot)
     ])
       .then(() => console.log('[CRON] ✅ Startup drip selesai.'))
@@ -2287,8 +2297,8 @@ async function triggerRealtimeMarketing(bot, userId) {
     // 2. [FIX] Hapus pengecekan Order disini agar buyer tetap dapat marketing untuk
     // produk-produk SISA yang belum dibeli. (Difilter di buildAllProductsKeyboard)
 
-    // 3. Cek cooldown global 48 jam menggunakan isInCooldown()
-    if (isInCooldown(user, { currentCampaign: 'RT_' })) return;
+    // 3. Cek cooldown global 48 jam menggunakan isInCooldown() (tanpa currentCampaign agar TIDAK mem-bypass lock)
+    if (isInCooldown(user)) return;
 
     // 4. Klasifikasi segment berdasarkan last_active_at
     const segment = await classifyNonBuyer(user);
@@ -2389,6 +2399,7 @@ module.exports = {
   stopDailyCron,
   triggerRealtimeMarketing,   // ← export baru
   getSmartRecommendation,
-  runCartAbandonCampaign
+  runCartAbandonCampaign,
+  runDripFollowUp
 };
 
