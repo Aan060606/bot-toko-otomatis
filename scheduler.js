@@ -499,12 +499,11 @@ function getProductCopy(products, segment) {
 async function runNonBuyerCampaign(bot) {
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
 
-  // [FIX KRITIS] Jangan andalkan purchase_count di User — sering tidak sinkron!
-  // Cari user yang BENAR-BENAR belum punya order SUCCESS di collection orders
-  const buyerUserIds = await Order.distinct('user_id', { status: 'SUCCESS' });
+  // [FIX KRITIS] Dihapus filter buyer agar buyer juga di-follow up untuk sisa produk yang belum dibeli
+  // const buyerUserIds = await Order.distinct('user_id', { status: 'SUCCESS' });
 
   const nonBuyers = await User.find({
-    _id: { $nin: buyerUserIds },          // Tidak ada di daftar buyer nyata
+    // _id: { $nin: buyerUserIds }, // Dihapus
     is_blocked: { $ne: true },
     last_active_at: { $gte: sixtyDaysAgo }
   }).lean();
@@ -553,9 +552,16 @@ async function runNonBuyerCampaign(bot) {
 
     // Bangun keyboard dengan diskon dinamis
     const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, discountVal);
+    
+    // [FIX] Jika user sudah beli SEMUA produk, tidak usah ditawari lagi
+    if (!allKeyboard || unboughtProducts.length === 0) {
+      stats.skipped++;
+      continue;
+    }
+    
     const keyboard = allKeyboard;
 
-    const prodList = unboughtProducts.length > 0 ? unboughtProducts : (defaultProduct ? [defaultProduct] : []);
+    const prodList = unboughtProducts;
     
     // [BUGFIX BUG-06] Hitung rotationIndex SEBELUM blok if/else agar tersedia di blok HOT
     const userIdNum = typeof user._id === 'object' ? parseInt(String(user._id).slice(-6), 16) : Number(user._id);
@@ -1368,7 +1374,7 @@ async function runPostPurchaseFollowUp(bot) {
 
     const media  = product?.promo_image_id || hFile;
     const mType  = product?.promo_image_id ? (product.promo_media_type || 'photo') : hType;
-    const result = await sendSafe(bot, user._id, msg, { media, mediaType: mType, campaign: 'CART_ABANDON_1H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    const result = await sendSafe(bot, user._id, msg, { media, mediaType: mType, campaign: 'POST_PURCHASE_S2_TIPS', userName: user.first_name || '?', reason: 'tips_and_review' });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
       await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
@@ -1421,7 +1427,7 @@ async function runPostPurchaseFollowUp(bot) {
     const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
     const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
-    const result   = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_3H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    const result   = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'POST_PURCHASE_S3_CROSSSELL', userName: user.first_name || '?', reason: 'cross_sell_10' });
     if (result.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 3, converted: true, exited_reason: 'POST_PURCHASE_COMPLETE' });
       await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
@@ -1476,7 +1482,7 @@ async function runPostPurchaseFollowUp(bot) {
     const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
     const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
-    const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'CART_ABANDON_12H', userName: user.first_name || '?', reason: 'abandon_'+abandonCount+'x' });
+    const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'POST_PURCHASE_S4_FINAL', userName: user.first_name || '?', reason: 'cross_sell_15' });
     if (result2.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
       stats.stage4 = (stats.stage4 || 0) + 1;
@@ -2208,9 +2214,8 @@ async function triggerRealtimeMarketing(bot, userId) {
     const user = await User.findById(userId).lean();
     if (!user || user.is_blocked) return;
 
-    // 2. Cek apakah user sudah beli (pakai Order, bukan purchase_count)
-    const hasBought = await Order.exists({ user_id: userId, status: 'SUCCESS' });
-    if (hasBought) return; // Buyer tidak dapat non-buyer campaign
+    // 2. [FIX] Hapus pengecekan Order disini agar buyer tetap dapat marketing untuk
+    // produk-produk SISA yang belum dibeli. (Difilter di buildAllProductsKeyboard)
 
     // 3. Cek cooldown 48 jam (pakai last_broadcast_at dari DB — persisten)
     if (user.last_broadcast_at) {
