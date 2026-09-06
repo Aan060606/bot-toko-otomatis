@@ -248,18 +248,18 @@ async function sendSafe(bot, userId, text, options = {}) {
     }
     
     // [FIX KRITIS] Gunakan native driver — findByIdAndUpdate(userId) dengan _id=Number
-    // sering silent fail di Mongoose → last_broadcast_at tidak tersimpan
+    // sering silent fail di Mongoose → timestamp tidak tersimpan
     // → cooldown tidak bekerja → user bisa dapat double marketing (RT + cron)!
     try {
       const db = User.db.db;
       await db.collection('users').updateOne(
         { _id: Number(userId) },
-        { $set: { last_broadcast_at: new Date() } }
+        { $set: { last_broadcast_at: new Date(), last_promo_campaign: options.campaign || 'UNKNOWN' } }
       );
     } catch (_) {
-      await User.updateOne({ _id: userId }, { $set: { last_broadcast_at: new Date() } }).catch(() => {});
+      await User.updateOne({ _id: userId }, { $set: { last_broadcast_at: new Date(), last_promo_campaign: options.campaign || 'UNKNOWN' } }).catch(() => {});
     }
-    sentInThisRun.add(String(userId)); // [FIX SPAM] Tandai user sudah dikirim di run ini
+    // (sentInThisRun removed)
     logger.marketing.sent(userId, options.userName || '?', options.campaign || 'UNKNOWN', options.reason || '-');
     return { ok: true };
   } catch (err) {
@@ -289,32 +289,24 @@ async function sendSafe(bot, userId, text, options = {}) {
   }
 }
 
-// [FIX SPAM] Set in-memory yang di-reset setiap kali runMarketingCampaign dipanggil.
-// Setiap user yang sudah menerima pesan dalam satu run TIDAK akan menerima pesan dari campaign lain.
-// Ini mencegah user mendapat 4x NON_BUYER atau 2x campaign berbeda dalam satu jam.
-const sentInThisRun = new Set();
-
-// Cek cooldown per-segment untuk tiap user
-// [FIX TOTAL] Sebelumnya: hanya cek sentInThisRun (in-memory Set)
-// = setiap restart bot, Set kosong → user bisa terima marketing berkali-kali sehari
-// Sesudah: cek last_broadcast_at di DB + minimum 48 jam antar campaign WARM/HOT
-// Ini yang menyebabkan 2.149 NON_BUYER_WARM dalam 7 hari ke user yang sama!
 const CAMPAIGN_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48 jam minimum antar campaign
 
-function isInCooldown(user, { bypassForBuyer = false } = {}) {
+function isInCooldown(user, { bypassForBuyer = false, overrideCooldownMs = null, currentCampaign = null } = {}) {
   if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false;
   if (bypassForBuyer && user.purchase_count > 0) return false;
-  // In-memory guard: jangan kirim >1 campaign ke user yang sama dalam 1 run
-  if (sentInThisRun.has(String(user._id))) return true;
-
-  // [FIX] DB-level cooldown: cek last_broadcast_at
-  // Jika user sudah dapat campaign dalam 48 jam terakhir → skip
+  
+  // Jika campaign yang akan dikirim SAMA (atau dalam grup funnel yang sama) dengan campaign sebelumnya,
+  // skip cooldown lintas-funnel (misal progresi internal funnel Cart Abandon stage 1 -> stage 2)
+  if (currentCampaign && user.last_promo_campaign && user.last_promo_campaign.startsWith(currentCampaign)) return false;
+  
+  const cooldownLimit = overrideCooldownMs !== null ? overrideCooldownMs : CAMPAIGN_COOLDOWN_MS;
+  
   if (user.last_broadcast_at) {
     const lastSent = new Date(user.last_broadcast_at).getTime();
-    if (Date.now() - lastSent < CAMPAIGN_COOLDOWN_MS) return true;
+    if (Date.now() - lastSent < cooldownLimit) {
+      return true;
+    }
   }
-
-  sentInThisRun.add(String(user._id));
   return false;
 }
 
@@ -546,7 +538,7 @@ async function runNonBuyerCampaign(bot) {
 
   for (const user of nonBuyers) {
     if (isUserQuietHour(user)) { stats.skipped++; continue; }
-    if (isInCooldown(user)) { stats.skipped++; continue; }
+    if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
 
     // [FIX] Cek semua produk, skip hanya jika SEMUA produk sudah ada drip aktif
     const existingDrips = await DripLog.find({ user_id: user._id, converted: false, stage: { $gt: 0 } }).lean();
@@ -757,67 +749,52 @@ async function getBoughtProductIds(userId) {
   return [...new Set(items.map(i => String(i.product_id)))];
 }
 
-// Smart Recommendation: cari produk populer di antara user dengan profil beli serupa
-async function getSmartRecommendation(userId, boughtIds, allProducts) {
+// Smart Recommendation: (Refactored to eliminate N+1 Query & Restore Collaborative Filtering)
+async function getSmartRecommendation(userId, boughtIds, allProducts, globalTopProducts, similarityMap) {
   const unbought = allProducts.filter(p => !boughtIds.includes(String(p._id)));
   if (!unbought.length) return null;
 
-  try {
-    // Cari user yang pernah beli produk yang sama
-    const similarUsersQuery = await OrderItem.aggregate([
-      { $match: { product_id: { $in: boughtIds } } },
-      { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
-      { $unwind: '$order' },
-      { $match: { 'order.status': 'SUCCESS', 'order.user_id': { $ne: userId } } },
-      { $group: { _id: '$order.user_id', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 100 }
-    ]);
-    
-    if (similarUsersQuery.length > 0) {
-      const similarUserIds = similarUsersQuery.map(u => u._id);
-      
-      // Cari produk apa yang paling banyak dibeli oleh similar users, yang belum dimiliki target
-      const topCandidates = await OrderItem.aggregate([
-        { $match: { product_id: { $nin: boughtIds } } },
-        { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
-        { $unwind: '$order' },
-        { $match: { 'order.user_id': { $in: similarUserIds }, 'order.status': 'SUCCESS' } },
-        { $group: { _id: '$product_id', count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 1 }
-      ]);
-
-      if (topCandidates.length > 0) {
-        const recommended = allProducts.find(p => String(p._id) === String(topCandidates[0]._id));
-        if (recommended) return recommended;
+  // 1. Tally Collaborative Filtering scores from precomputed similarityMap
+  if (similarityMap) {
+    const scores = {};
+    for (const bId of boughtIds) {
+      const similarArr = similarityMap[String(bId)] || [];
+      // Similar products that user hasn't bought yet
+      for (const simId of similarArr) {
+        if (!boughtIds.includes(simId)) {
+          scores[simId] = (scores[simId] || 0) + 1;
+        }
       }
     }
-
-    // Fallback 1: produk terlaris secara keseluruhan yang belum dimiliki
-    const globalTop = await OrderItem.aggregate([
-      { $match: { product_id: { $nin: boughtIds } } },
-      { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
-      { $unwind: '$order' },
-      { $match: { 'order.status': 'SUCCESS' } },
-      { $group: { _id: '$product_id', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 1 }
-    ]);
-
-    if (globalTop.length > 0) {
-      const recommended = allProducts.find(p => String(p._id) === String(globalTop[0]._id));
-      if (recommended) return recommended;
+    
+    // Pick the product with the highest similarity score
+    let bestSimId = null;
+    let maxScore = 0;
+    for (const [sId, score] of Object.entries(scores)) {
+      if (score > maxScore) {
+        maxScore = score;
+        bestSimId = sId;
+      }
     }
-  } catch (e) {
-    // Silent fail, pakai urutan database sebagai fallback final
+    
+    if (bestSimId) {
+      const rec = allProducts.find(p => String(p._id) === bestSimId);
+      if (rec) return rec;
+    }
   }
 
-  // Fallback final: urutan database
+  // 2. Fallback: Cukup cari produk teratas dari globalTopProducts yang belum dibeli
+  // Karena globalTopProducts sudah memuat seluruh produk (diurutkan berdasarkan terlaris),
+  // fungsi find() akan otomatis menemukan rekomendasi terbaik, atau fallback produk biasa.
+  if (globalTopProducts && globalTopProducts.length > 0) {
+    return globalTopProducts.find(p => !boughtIds.includes(String(p._id))) || null;
+  }
+
+  // Fallback darurat jika cache gagal terload
   return unbought[0];
 }
 
-async function runCrossSellCampaign(bot, allProducts) {
+async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similarityMap) {
   if (allProducts.length < 2) return { crossSell: 0, complete: 0, skipped: 0, failed: 0 };
 
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
@@ -833,12 +810,12 @@ async function runCrossSellCampaign(bot, allProducts) {
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
   for (const user of partialBuyers) {
-    if (isInCooldown(user)) { stats.skipped++; continue; }
+    if (isInCooldown(user, { currentCampaign: 'VIP_WINBACK' })) { stats.skipped++; continue; }
 
     const boughtIds = await getBoughtProductIds(user._id);
     if (boughtIds.length >= totalCount) { stats.complete++; continue; }
 
-    const targetProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
+    const targetProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, globalTopProducts, similarityMap);
     if (!targetProduct) { stats.skipped++; continue; }
 
     // [FIX] Guard duplikat: skip jika sudah pernah dapat cross-sell produk ini hari ini
@@ -957,7 +934,6 @@ async function runDripFollowUp(bot) {
   // [FIX BUG#2] Reset sentInThisRun di awal SETIAP panggilan runDripFollowUp
   // Sebelumnya hanya di-clear di runMarketingCampaign — saat drip-only path (baris 1769)
   // dipanggil, set masih berisi userId dari run sebelumnya → semua drip di-skip!
-  sentInThisRun.clear();
 
   // === HARD CAP 90 HARI: Tutup funnel diam-diam jika macet terlalu lama ===
   const ninetyDaysAgo = new Date(now.getTime() - (90 * 24 * 60 * 60 * 1000));
@@ -1064,6 +1040,8 @@ async function runDripFollowUp(bot) {
     converted: false
   }).lean();
 
+  const globalTopProducts = arguments[3] || [];
+  const similarityMap = arguments[4] || {};
   for (const log of stage1Logs) {
     try {
       const user = await User.findById(log.user_id).lean();
@@ -1073,7 +1051,7 @@ async function runDripFollowUp(bot) {
       }
 
       // [FIX SPAM] Cek cooldown — max 1 drip per user per hari (walau punya banyak produk)
-      if (isInCooldown(user)) { stats.skipped++; continue; }
+      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
@@ -1173,7 +1151,7 @@ async function runDripFollowUp(bot) {
         continue;
       }
       // [FIX SPAM] Max 1 drip per user per hari
-      if (isInCooldown(user)) { stats.skipped++; continue; }
+      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
@@ -1264,7 +1242,7 @@ async function runDripFollowUp(bot) {
         continue;
       }
       // [FIX SPAM] Max 1 drip per user per hari
-      if (isInCooldown(user)) { stats.skipped++; continue; }
+      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
 
       const product = await Product.findById(log.product_id).lean();
       if (!product) {
@@ -1370,7 +1348,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage1) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
 
     const product = await Product.findById(log.product_id).lean();
     const name    = user.first_name || 'Bos';
@@ -1414,10 +1392,9 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage2) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
 
-    const boughtIds  = await getBoughtProductIds(user._id);
-    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
+    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, arguments[3], arguments[4]); // arguments[3] = globalTop, arguments[4] = simMap
     if (!nextProduct) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'COMPLETE' });
       continue;
@@ -1468,11 +1445,10 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage3Done) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
 
-
-    const boughtIds   = await getBoughtProductIds(user._id);
-    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts);
+    const boughtIds = await getBoughtProductIds(user._id);
+    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, arguments[3], arguments[4]);
     if (!nextProduct) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'ALL_BOUGHT' });
       continue;
@@ -1574,8 +1550,11 @@ async function runCartAbandonCampaign(bot) {
   for (const drip of pendingCA) {
     const user = await User.findById(drip.user_id).lean();
     if (!user || user.is_blocked) { stats.skipped++; continue; }
-    // Cart abandon BYPASS cooldown — user ini butuh direscue, bukan di-skip
-    if (isInCooldown(user) && user.purchase_count > 0) { stats.skipped++; continue; }
+    // Cart abandon non-buyer bypass cooldown 48 jam, TAPI tetap butuh jeda minimal 2 jam 
+    // agar tidak bertabrakan agresif jika baru dapat promo lain.
+    // Buyer tetap pakai cooldown normal 48 jam (di-skip jika < 48 jam).
+    const customCooldown = user.purchase_count === 0 ? 2 * 60 * 60 * 1000 : null;
+    if (isInCooldown(user, { overrideCooldownMs: customCooldown, currentCampaign: 'CART_ABANDON' })) { stats.skipped++; continue; }
 
     // Pastikan belum bayar setelah abandon terakhir
     const lastAbandoned = await Order.findOne({ user_id: user._id, status: 'EXPIRED' }).sort({ created_at: -1 }).lean();
@@ -1764,15 +1743,82 @@ async function runFlashSaleCampaign(bot, allProducts) {
   return stats;
 }
 
-// ─── CAMPAIGN UTAMA ──────────────────────────────────────────────────────────
+// --- CACHE MODULE LEVEL UNTUK GLOBAL TOP PRODUCTS & SIMILARITY MAP ---
+let cachedGlobalTopProducts = null;
+let cachedSimilarityMap = null;
+let lastGlobalTopProductsUpdate = 0;
 
 async function runMarketingCampaign(bot, todayStr) {
   if (!marketingEnabled) {
     return { skipped: true, reason: 'Marketing dimatikan Admin' };
   }
 
+  // PRE-COMPUTE N+1 QUERY ELIMINATION (TASK 1)
+  const allProducts = await Product.find({ active: 1 }).lean();
+  const now = Date.now();
+  if (!cachedGlobalTopProducts || (now - lastGlobalTopProductsUpdate > 3600000)) {
+    // 1. Global Top Products
+    const globalTop = await OrderItem.aggregate([
+      { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
+      { $unwind: '$order' },
+      { $match: { 'order.status': 'SUCCESS' } },
+      { $group: { _id: '$product_id', qty: { $sum: 1 } } },
+      { $sort: { qty: -1 } }
+    ]);
+    const topProducts = [];
+    for (const row of globalTop) {
+      const prod = allProducts.find(p => String(p._id) === String(row._id));
+      if (prod) topProducts.push(prod);
+    }
+    for (const p of allProducts) {
+      if (!topProducts.find(t => String(t._id) === String(p._id))) topProducts.push(p);
+    }
+    cachedGlobalTopProducts = topProducts;
+
+    // 2. Similarity Map (Collaborative Filtering: Product -> [Similar Products])
+    // Pre-compute O(1) query: Ambil semua riwayat belanja user yang sukses, lalu buat matrix di memori
+    const userPurchases = await OrderItem.aggregate([
+      { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
+      { $unwind: '$order' },
+      { $match: { 'order.status': 'SUCCESS' } },
+      { $group: { _id: '$order.user_id', products: { $addToSet: '$product_id' } } }
+    ]);
+
+    const coMatrix = {};
+    for (const user of userPurchases) {
+      const prods = user.products;
+      for (let i = 0; i < prods.length; i++) {
+        for (let j = 0; j < prods.length; j++) {
+          if (i !== j) {
+            const pA = String(prods[i]);
+            const pB = String(prods[j]);
+            if (!coMatrix[pA]) coMatrix[pA] = {};
+            coMatrix[pA][pB] = (coMatrix[pA][pB] || 0) + 1;
+          }
+        }
+      }
+    }
+
+    const simMap = {};
+    for (const pA in coMatrix) {
+      // Ambil top 3 produk yang paling sering dibeli bersama pA
+      const sorted = Object.entries(coMatrix[pA]).sort((a,b) => b[1] - a[1]).slice(0,3);
+      simMap[pA] = sorted.map(s => s[0]);
+    }
+    
+    // Ensure every active product at least has an empty array if no co-occurrence
+    for (const p of allProducts) {
+      if (!simMap[String(p._id)]) simMap[String(p._id)] = [];
+    }
+    
+    cachedSimilarityMap = simMap;
+    
+    lastGlobalTopProductsUpdate = now;
+  }
+  const globalTopProducts = cachedGlobalTopProducts;
+  const similarityMap = cachedSimilarityMap;
+
   // [FIX SPAM] Reset per-run Set agar tracking hanya berlaku dalam 1 run ini
-  sentInThisRun.clear();
 
   // [FIX #3] Cleanup diskon expired — jalan tiap jam, bukan hanya jam 03:00
   try {
@@ -1821,21 +1867,23 @@ async function runMarketingCampaign(bot, todayStr) {
       progress.campaign = 'START';
     } else {
       // Sudah selesai hari ini — Drip tetap jalan tiap jam, campaign utama skip
-      console.log('[CRON] Campaign utama sudah selesai hari ini. Hanya menjalankan Drip Follow-Up...');
-      await runDripFollowUp(bot);
-      await runPostPurchaseFollowUp(bot); // [W9] Post-purchase jalan tiap jam
-      await runCartAbandonCampaign(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam
+      console.log('[CRON] Campaign utama sudah selesai hari ini. Menjalankan recurring hourly campaigns...');
+      // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
+      await runCartAbandonCampaign(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam (Prioritas 1)
+      await runPostPurchaseFollowUp(bot); // [W9] Post-purchase jalan tiap jam (Prioritas 2)
+      await runDripFollowUp(bot);         // Drip Follow up (Prioritas 3)
       return { skipped: false, drip_only: true };
     }
   }
 
   if (progress.campaign === 'START') {
-    console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
-    dripStats = await runDripFollowUp(bot);
-    console.log('[MARKETING] Campaign 4: Post-Purchase Follow-Up...');
-    await runPostPurchaseFollowUp(bot); // [W9] Tips hari ke-3 + cross-sell hari ke-7
+    // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
     console.log('[MARKETING] Campaign 5: Cart Abandon Hyper-Recovery...');
-    cartAbandonStats = await runCartAbandonCampaign(bot); // [UPGRADE 1]
+    cartAbandonStats = await runCartAbandonCampaign(bot); // Prioritas 1
+    console.log('[MARKETING] Campaign 4: Post-Purchase Follow-Up...');
+    await runPostPurchaseFollowUp(bot);                   // Prioritas 2
+    console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
+    dripStats = await runDripFollowUp(bot);               // Prioritas 3
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'DRIP_DONE' });
     progress.campaign = 'DRIP_DONE';
   }
@@ -1864,7 +1912,7 @@ async function runMarketingCampaign(bot, todayStr) {
   if (progress.campaign === 'VIP_DONE') {
     const allProducts = await Product.find({ active: 1 }).lean();
     console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
-    crossSellStats = await runCrossSellCampaign(bot, allProducts);
+    crossSellStats = await runCrossSellCampaign(bot, allProducts, globalTopProducts, similarityMap);
     console.log('[MARKETING] Campaign 6: Flash Sale (Minggu Malam)...');
     flashSaleStats = await runFlashSaleCampaign(bot, allProducts); // [UPGRADE 2]
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'COMPLETED', completed: true });
@@ -1984,7 +2032,7 @@ async function runVIPWinBackCampaign(bot) {
   }).lean();
 
   for (const user of vips) {
-    if (isUserQuietHour(user) || isInCooldown(user)) continue;
+    if (isUserQuietHour(user) || isInCooldown(user, { currentCampaign: 'FLASH_SALE' })) continue;
     
     // [FIX] Ganti Markdown (*bold*) ke HTML (<b>bold</b>) — sendSafe pakai parse_mode HTML
     const msg =
@@ -2239,11 +2287,8 @@ async function triggerRealtimeMarketing(bot, userId) {
     // 2. [FIX] Hapus pengecekan Order disini agar buyer tetap dapat marketing untuk
     // produk-produk SISA yang belum dibeli. (Difilter di buildAllProductsKeyboard)
 
-    // 3. Cek cooldown 48 jam (pakai last_broadcast_at dari DB — persisten)
-    if (user.last_broadcast_at) {
-      const lastSent = new Date(user.last_broadcast_at).getTime();
-      if (Date.now() - lastSent < CAMPAIGN_COOLDOWN_MS) return; // Masih cooldown
-    }
+    // 3. Cek cooldown global 48 jam menggunakan isInCooldown()
+    if (isInCooldown(user, { currentCampaign: 'RT_' })) return;
 
     // 4. Klasifikasi segment berdasarkan last_active_at
     const segment = await classifyNonBuyer(user);
@@ -2342,6 +2387,8 @@ module.exports = {
   setMarketingEnabled,
   isMarketingEnabled,
   stopDailyCron,
-  triggerRealtimeMarketing   // ← export baru
+  triggerRealtimeMarketing,   // ← export baru
+  getSmartRecommendation,
+  runCartAbandonCampaign
 };
 

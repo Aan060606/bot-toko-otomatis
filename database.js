@@ -34,6 +34,7 @@ const UserSchema = new mongoose.Schema({
   is_blocked: { type: Boolean, default: false },
   source_ref: String,
   last_broadcast_at: { type: Date, default: null }, // Kapan terakhir dapat pesan marketing otomatis (anti-spam 48 jam)
+  last_promo_campaign: { type: String, default: null }, // Campaign apa yang terakhir dikirim
   last_menu_msg_id: { type: Number, default: null } // Menyimpan ID pesan menu utama terakhir
 });
 
