@@ -200,6 +200,60 @@ async function calculateDynamicDiscount(user, productPrice = 0) {
   return { percentage: cap(10), title: 'Promo Pelanggan Setia' };
 }
 
+// ==========================================
+// TELEGRAM RATE LIMIT QUEUE (TASK 3)
+// ==========================================
+class TelegramQueue {
+  constructor() {
+    this.queue = [];
+    this.isProcessing = false;
+    this.pausedUntil = 0;
+    // 35ms delay = max ~28 req/sec (aman di bawah limit 30 req/sec)
+    this.delayMs = 35;
+  }
+
+  enqueue(task) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ task, resolve, reject });
+      this.process();
+    });
+  }
+
+  async process() {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+
+    while (this.queue.length > 0) {
+      if (Date.now() < this.pausedUntil) {
+        const waitTime = this.pausedUntil - Date.now();
+        await new Promise(r => setTimeout(r, waitTime));
+      }
+
+      const { task, resolve, reject } = this.queue.shift();
+      try {
+        const result = await task();
+        resolve(result);
+      } catch (err) {
+        if (err.code === 429) {
+          const retryAfter = err.parameters?.retry_after || 5;
+          console.warn(`⚠️ [QUEUE] Telegram Rate Limit (429). Pause ${retryAfter} detik.`);
+          this.pausedUntil = Date.now() + (retryAfter * 1000);
+          this.queue.unshift({ task, resolve, reject }); // Retry
+        } else {
+          reject(err);
+        }
+      }
+
+      if (this.queue.length > 0) {
+        await new Promise(r => setTimeout(r, this.delayMs));
+      }
+    }
+    this.isProcessing = false;
+  }
+}
+
+const telegramQueue = new TelegramQueue();
+
 async function sendSafe(bot, userId, text, options = {}) {
   try {
     const extra = { parse_mode: 'HTML' };
@@ -216,36 +270,41 @@ async function sendSafe(bot, userId, text, options = {}) {
     // Telegram mendukung reply_markup di photo & video tapi TIDAK di animation.
     // Solusi: sendAnimation tanpa caption, lalu sendMessage dengan teks+tombol.
 
-    if (options.mediaGroup && options.mediaGroup.length > 1) {
-      // Album foto: kirim album dulu (tanpa caption), lalu teks+tombol dalam 1 pesan
-      const mediaArr = options.mediaGroup.map(m => ({
-        type: m.type || 'photo',
-        media: m.file_id
-      }));
-      await bot.telegram.sendMediaGroup(userId, mediaArr);
-      // Kirim teks+tombol sebagai 1 pesan setelah album
-      await bot.telegram.sendMessage(userId, text, extra);
+    const task = async () => {
+      if (options.mediaGroup && options.mediaGroup.length > 1) {
+        // Album foto: kirim album dulu (tanpa caption), lalu teks+tombol dalam 1 pesan
+        const mediaArr = options.mediaGroup.map(m => ({
+          type: m.type || 'photo',
+          media: m.file_id
+        }));
+        await bot.telegram.sendMediaGroup(userId, mediaArr);
+        // Kirim teks+tombol sebagai 1 pesan setelah album
+        return await bot.telegram.sendMessage(userId, text, extra);
 
-    } else if (options.media) {
-      const hType = options.mediaType || 'url';
-      const hFile = options.media;
-      const isPhoto = hType === 'photo' || (hType === 'url' && hFile.match(/\.(jpeg|jpg|png)$/i));
-      const isVideo = hType === 'video';
+      } else if (options.media) {
+        const hType = options.mediaType || 'url';
+        const hFile = options.media;
+        const isPhoto = hType === 'photo' || (hType === 'url' && hFile.match(/\.(jpeg|jpg|png)$/i));
+        const isVideo = hType === 'video';
 
-      if (isPhoto) {
-        // Foto: bisa caption+tombol dalam 1 pesan
-        await bot.telegram.sendPhoto(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
-      } else if (isVideo) {
-        // Video: bisa caption+tombol dalam 1 pesan
-        await bot.telegram.sendVideo(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+        if (isPhoto) {
+          // Foto: bisa caption+tombol dalam 1 pesan
+          return await bot.telegram.sendPhoto(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+        } else if (isVideo) {
+          // Video: bisa caption+tombol dalam 1 pesan
+          return await bot.telegram.sendVideo(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+        } else {
+          // GIF/Animation: sekarang kirim gabung dalam 1 pesan (caption + tombol)
+          return await bot.telegram.sendAnimation(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+        }
       } else {
-        // GIF/Animation: sekarang kirim gabung dalam 1 pesan (caption + tombol)
-        await bot.telegram.sendAnimation(userId, hFile, { caption: text, parse_mode: 'HTML', reply_markup: replyMarkup || undefined });
+        // Teks only
+        return await bot.telegram.sendMessage(userId, text, extra);
       }
-    } else {
-      // Teks only
-      await bot.telegram.sendMessage(userId, text, extra);
-    }
+    };
+
+    // Eksekusi API call melalui antrean rate limit
+    await telegramQueue.enqueue(task);
     
     // [FIX KRITIS] Gunakan native driver — findByIdAndUpdate(userId) dengan _id=Number
     // sering silent fail di Mongoose → timestamp tidak tersimpan
@@ -263,11 +322,11 @@ async function sendSafe(bot, userId, text, options = {}) {
     logger.marketing.sent(userId, options.userName || '?', options.campaign || 'UNKNOWN', options.reason || '-');
     return { ok: true };
   } catch (err) {
-    const isBlocked = err.description && (
+    const isBlocked = err.code === 403 || err.code === 400 || (err.description && (
       err.description.includes('bot was blocked') ||
       err.description.includes('user is deactivated') ||
       err.description.includes('chat not found')
-    );
+    ));
     if (isBlocked) {
       // [FIX IS_BLOCKED] Gunakan native driver karena findByIdAndUpdate
       // punya _id type mismatch (Number vs ObjectId) -> update silent fail
@@ -1127,7 +1186,7 @@ async function runDripFollowUp(bot) {
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S2', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 2, sent_at: new Date() });
-        stats.stage2++;
+        stats.sent++;
         sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
@@ -1224,7 +1283,7 @@ async function runDripFollowUp(bot) {
             active: true  // [FIX] WAJIB ada agar berlaku di checkout!
           });
         }
-        stats.stage3++;
+        stats.sent++;
         sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
@@ -1289,7 +1348,7 @@ async function runDripFollowUp(bot) {
           value: stage4DiscPct,
           valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
         });
-        stats.stage4 = (stats.stage4 || 0) + 1;
+        stats.sent++;
         sentThisExecution.add(String(user._id));
       } else {
         if (result.isBlocked) await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
@@ -1502,7 +1561,7 @@ async function runPostPurchaseFollowUp(bot) {
     const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'POST_PURCHASE_S4_FINAL', userName: user.first_name || '?', reason: 'cross_sell_15' });
     if (result2.ok) {
       await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
-      stats.stage4 = (stats.stage4 || 0) + 1;
+      stats.sent++;
       sentThisExecution.add(String(user._id));
     } else { stats.skipped++; }
     await delay(1500);
