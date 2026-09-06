@@ -120,7 +120,7 @@ const DiscountSchema = new mongoose.Schema({
   type: { type: String, enum: ['PERCENTAGE', 'FIXED', 'BUNDLE'] }, // BUNDLE = diskon paket semua produk
 
   value: Number,
-  trigger_event: { type: String, enum: ['FIRST_TIME', 'LOYALTY', 'CART_ABANDON', 'ALL', null] }, // Cegah typo
+  trigger_event: { type: String, enum: ['FIRST_TIME', 'LOYALTY', 'CART_ABANDON', 'CROSS_SELL', 'DRIP', 'REALTIME', 'ALL', null] }, // Cegah typo
   target_user_id: { type: Number, ref: 'User' }, // Optional specific user
   target_product_id: { type: String, ref: 'Product' }, // Optional specific product
   min_purchase: { type: Number, default: 0 },

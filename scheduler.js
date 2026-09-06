@@ -717,7 +717,7 @@ async function runNonBuyerCampaign(bot) {
       }).lean();
       if (!existingDisc) {
         await Discount.findOneAndUpdate(
-          { target_user_id: Number(user._id), target_product_id: null, type: 'PERCENTAGE', active: true },
+          { target_user_id: Number(user._id), target_product_id: null, trigger_event: 'REALTIME', type: 'PERCENTAGE', active: true },
           { $set: { value: discountVal, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
           { upsert: true }
         );
@@ -767,7 +767,7 @@ async function runNonBuyerCampaign(bot) {
           const existCA = await Discount.findOne({ target_user_id: Number(user._id), active: true, valid_until: { $gt: new Date() } }).lean();
           if (!existCA) {
             await Discount.findOneAndUpdate(
-              { target_user_id: Number(user._id), target_product_id: null, type: 'PERCENTAGE', active: true },
+              { target_user_id: Number(user._id), target_product_id: null, trigger_event: 'CART_ABANDON', type: 'PERCENTAGE', active: true },
               { $set: { value: 10, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
               { upsert: true }
             );
@@ -1263,7 +1263,7 @@ async function runDripFollowUp(bot) {
         }).lean();
         if (!existingS3Disc) {
           await Discount.findOneAndUpdate(
-            { target_user_id: Number(user._id), target_product_id: String(log.product_id), type: 'PERCENTAGE', active: true },
+            { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
             { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
             { upsert: true }
           );
@@ -1328,7 +1328,7 @@ async function runDripFollowUp(bot) {
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
         await Discount.findOneAndUpdate(
-          { target_user_id: Number(user._id), target_product_id: String(log.product_id), type: 'PERCENTAGE', active: true },
+          { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
           { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
           { upsert: true }
         );
@@ -1476,7 +1476,7 @@ async function runPostPurchaseFollowUp(bot) {
       `👇 <b>Klaim Diskon Sekarang</b>`;
 
     await Discount.findOneAndUpdate(
-      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), type: 'PERCENTAGE', active: true },
+      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), trigger_event: 'CROSS_SELL', type: 'PERCENTAGE', active: true },
       { $set: { value: 10, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
       { upsert: true }
     );
@@ -1530,7 +1530,7 @@ async function runPostPurchaseFollowUp(bot) {
       `👇 <b>Klaim Diskon Terakhir</b>`;
 
     await Discount.findOneAndUpdate(
-      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), type: 'PERCENTAGE', active: true },
+      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), trigger_event: 'CROSS_SELL', type: 'PERCENTAGE', active: true },
       { $set: { value: 15, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
       { upsert: true }
     );
@@ -1691,7 +1691,7 @@ async function runCartAbandonCampaign(bot) {
     if (discVal > 0) {
       const targetProdId = productId && productId !== 'BUNDLE' ? String(productId) : null;
       await Discount.findOneAndUpdate(
-        { target_user_id: Number(user._id), target_product_id: targetProdId, type: 'PERCENTAGE', active: true },
+        { target_user_id: Number(user._id), target_product_id: targetProdId, trigger_event: 'CART_ABANDON', type: 'PERCENTAGE', active: true },
         { $set: { value: discVal, valid_until: new Date(Date.now() + 12 * 60 * 60 * 1000) } },
         { upsert: true }
       );
@@ -2381,7 +2381,7 @@ async function triggerRealtimeMarketing(bot, userId) {
       }).lean();
       if (!existingDisc) {
         await Discount.findOneAndUpdate(
-          { target_user_id: Number(userId), target_product_id: null, type: 'PERCENTAGE', active: true },
+          { target_user_id: Number(userId), target_product_id: null, trigger_event: 'REALTIME', type: 'PERCENTAGE', active: true },
           { $set: { value: discountVal, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
           { upsert: true }
         );
