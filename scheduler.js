@@ -724,14 +724,11 @@ async function runNonBuyerCampaign(bot) {
         valid_until: { $gt: new Date() }
       }).lean();
       if (!existingDisc) {
-        await Discount.create({
-          target_user_id: Number(user._id),
-          target_product_id: null,
-          type: 'PERCENTAGE',
-          value: discountVal,
-          valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 jam expire
-          active: true
-        });
+        await Discount.findOneAndUpdate(
+          { target_user_id: Number(user._id), target_product_id: null, type: 'PERCENTAGE', active: true },
+          { $set: { value: discountVal, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
+          { upsert: true }
+        );
       }
     }
 
@@ -777,13 +774,11 @@ async function runNonBuyerCampaign(bot) {
         if (segment === 'CART_ABANDON' && String(dripProd._id) === String(unboughtForDrip[0]._id)) {
           const existCA = await Discount.findOne({ target_user_id: Number(user._id), active: true, valid_until: { $gt: new Date() } }).lean();
           if (!existCA) {
-            await Discount.create({
-              target_user_id: Number(user._id),
-              type: 'PERCENTAGE',
-              value: 10,
-              valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000),
-              active: true
-            });
+            await Discount.findOneAndUpdate(
+              { target_user_id: Number(user._id), target_product_id: null, type: 'PERCENTAGE', active: true },
+              { $set: { value: 10, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+              { upsert: true }
+            );
           }
         }
 
@@ -1275,13 +1270,11 @@ async function runDripFollowUp(bot) {
           valid_until: { $gt: new Date() }
         }).lean();
         if (!existingS3Disc) {
-          await Discount.create({
-            target_user_id: Number(user._id),
-            type: 'PERCENTAGE',
-            value: discountRule.percentage,
-            valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 jam
-            active: true  // [FIX] WAJIB ada agar berlaku di checkout!
-          });
+          await Discount.findOneAndUpdate(
+            { target_user_id: Number(user._id), target_product_id: String(log.product_id), type: 'PERCENTAGE', active: true },
+            { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+            { upsert: true }
+          );
         }
         stats.sent++;
         sentThisExecution.add(String(user._id));
@@ -1342,12 +1335,11 @@ async function runDripFollowUp(bot) {
       const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S4', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
-        await Discount.create({
-          target_user_id: Number(user._id),
-          type: 'PERCENTAGE',
-          value: stage4DiscPct,
-          valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000)
-        });
+        await Discount.findOneAndUpdate(
+          { target_user_id: Number(user._id), target_product_id: String(log.product_id), type: 'PERCENTAGE', active: true },
+          { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+          { upsert: true }
+        );
         stats.sent++;
         sentThisExecution.add(String(user._id));
       } else {
@@ -1491,13 +1483,11 @@ async function runPostPurchaseFollowUp(bot) {
       `<blockquote>Member yang punya keduanya bilang koleksinya jauh lebih lengkap.</blockquote>\n\n` +
       `👇 <b>Klaim Diskon Sekarang</b>`;
 
-    await Discount.create({
-      target_user_id: Number(user._id),
-      target_product_id: String(nextProduct._id),
-      type: 'PERCENTAGE', value: 10,
-      valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000),
-      active: true
-    });
+    await Discount.findOneAndUpdate(
+      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), type: 'PERCENTAGE', active: true },
+      { $set: { value: 10, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+      { upsert: true }
+    );
 
     const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
@@ -1547,13 +1537,11 @@ async function runPostPurchaseFollowUp(bot) {
       `<blockquote>Setelah ini tidak ada penawaran lagi. Harga kembali normal.</blockquote>\n\n` +
       `👇 <b>Klaim Diskon Terakhir</b>`;
 
-    await Discount.create({
-      target_user_id: Number(user._id),
-      target_product_id: String(nextProduct._id),
-      type: 'PERCENTAGE', value: 15,
-      valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000),
-      active: true
-    });
+    await Discount.findOneAndUpdate(
+      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), type: 'PERCENTAGE', active: true },
+      { $set: { value: 15, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
+      { upsert: true }
+    );
 
     const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
@@ -1709,21 +1697,18 @@ async function runCartAbandonCampaign(bot) {
     }
 
     if (discVal > 0) {
-      await Discount.create({
-        target_user_id: Number(user._id),
-        target_product_id: productId && productId !== 'BUNDLE' ? String(productId) : null,
-        type: 'PERCENTAGE',
-        value: discVal,
-        valid_until: new Date(Date.now() + 12 * 60 * 60 * 1000),
-        active: true
-      });
+      const targetProdId = productId && productId !== 'BUNDLE' ? String(productId) : null;
+      await Discount.findOneAndUpdate(
+        { target_user_id: Number(user._id), target_product_id: targetProdId, type: 'PERCENTAGE', active: true },
+        { $set: { value: discVal, valid_until: new Date(Date.now() + 12 * 60 * 60 * 1000) } },
+        { upsert: true }
+      );
     }
 
     const hType = await getSetting('header_type', 'url');
     const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
     
-    // [FIX BUG#4] Campaign label harus 'CART_ABANDON' bukan 'FLASH_SALE'
-    // sendSafe() akan update last_broadcast_at — cooldown aktif setelah ini
+    // [FIX BUG]
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'CART_ABANDON', userName: user.first_name || '?', reason: drip.product_id || 'cart_abandon' });
     if (result.ok) {
       // Update DripLog stage 0 → stage yang dikirim (bukan buat baru, cegah duplikat)
@@ -1771,16 +1756,11 @@ async function runFlashSaleCampaign(bot, allProducts) {
   if (users.length === 0) return stats;
 
   // Create global flash sale discount
-  await Discount.create({
-    target_user_id: null,
-    target_product_id: null,
-    type: 'PERCENTAGE',
-    value: 20, 
-    valid_until: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59),
-    active: true,
-    max_uses: 20, // Hanya untuk 20 orang pertama
-    used_count: 0
-  });
+  await Discount.findOneAndUpdate(
+    { target_user_id: null, target_product_id: null, type: "PERCENTAGE", active: true },
+    { $setOnInsert: { max_uses: 20, used_count: 0 }, $set: { value: 20, valid_until: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59) } },
+    { upsert: true }
+  );
 
   // Flash Sale message — DNA J-SUB: subtitle + koleksi berkembang
   const totalBuyersFS = await User.countDocuments({ purchase_count: { $gt: 0 } }).catch(() => 0);
@@ -2408,15 +2388,11 @@ async function triggerRealtimeMarketing(bot, userId) {
         valid_until: { $gt: new Date() }
       }).lean();
       if (!existingDisc) {
-        await Discount.create({
-          target_user_id: Number(userId),
-          target_product_id: null,
-          type: 'PERCENTAGE',
-          value: discountVal,
-          // Expire 48 jam — cukup untuk user yang balik besok
-          valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000),
-          active: true
-        });
+        await Discount.findOneAndUpdate(
+          { target_user_id: Number(userId), target_product_id: null, type: 'PERCENTAGE', active: true },
+          { $set: { value: discountVal, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
+          { upsert: true }
+        );
       }
     }
 
