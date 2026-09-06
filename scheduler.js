@@ -39,18 +39,10 @@ let lastCronDate = null; // Still used for manual/startup run guard
 // [FIX] Mencegah spam jam 2 pagi tanpa mematikan fitur cron per jam.
 function isUserQuietHour(user) {
   const currentHour = new Date(new Date().toLocaleString('en-US', {timeZone: 'Asia/Jakarta'})).getHours();
-  // Jam tenang: 00:00 sampai 06:00 pagi
+  // Pukul Rata: Jam 00:00 sampai 06:00 dilarang kirim promo (Kecuali Cart Abandon).
+  // Mencegah block rate tinggi akibat False Positive kalong.
   if (currentHour >= 0 && currentHour <= 6) {
-    if (!user.last_active_at) return true; // Asumsikan tidur jika tidak ada data
-    
-    // Cek jam kebiasaan user aktif
-    const userActiveHour = parseInt(new Date(user.last_active_at).toLocaleString('en-US',{timeZone:'Asia/Jakarta',hour:'numeric',hour12:false}));
-    
-    // Jika user memang kalong (biasa aktif di jam tenang), tetap kirim!
-    if (userActiveHour >= 0 && userActiveHour <= 6) {
-      return false; 
-    }
-    return true; // Normal user, biarkan dia tidur, skip kirim.
+    return true; 
   }
   return false;
 }
