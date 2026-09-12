@@ -3063,9 +3063,11 @@ if (process.env.NODE_ENV !== "test") {
       })
       .catch(async (err) => {
         if (err.message && err.message.includes('409')) {
-          logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 15 detik lalu restart...");
-          // [FIX] Tunggu 15 detik agar instance lama benar-benar mati sebelum Coolify restart
-          await new Promise(r => setTimeout(r, 15000));
+          logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 60 detik lalu restart...");
+          // [FIX] Tingkatkan delay 15s → 60s agar loop restart cepat (409 storm) tidak terjadi
+          // Loop sebelumnya: restart tiap 15 detik → Telegram terus anggap 2 instance → 409 terus
+          // Solusi: tunggu 60 detik → instance lama pasti sudah hilang, polling bisa diambil alih
+          await new Promise(r => setTimeout(r, 60000));
           process.exit(1);
         } else {
           logger.error("Gagal menjalankan bot:", err.message);

@@ -100,30 +100,24 @@ async function acquireCampaignLock(userId, campaignType) {
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
   
   try {
-    // Atomic operation: create lock only if it doesn't exist
-    // $setOnInsert ensures fields are only set when a new document is created (upserted)
-    const result = await CampaignLock.findOneAndUpdate(
-      { lock_key: lockKey },
-      { 
-        $setOnInsert: { 
-          campaign_type: campaignType, 
-          acquired_at: new Date(),
-          expires_at: expiresAt
-        }
-      },
-      { upsert: true, new: true, rawResult: true }
-    );
-    
-    // If upserted (created new document), we successfully acquired the lock
-    // If document already existed, another campaign has the lock
-    return result.lastErrorObject.upserted !== undefined;
+    // [FIX] Mongoose v9: rawResult format berubah, lastErrorObject tidak ada lagi.
+    // Solusi: pakai upsert + E11000 sebagai sinyal lock sudah dipegang instance lain.
+    // Jika insert berhasil (tidak throw) = kita dapat lock.
+    // Jika throw E11000 = lock sudah ada.
+    await CampaignLock.create({
+      lock_key: lockKey,
+      campaign_type: campaignType,
+      acquired_at: new Date(),
+      expires_at: expiresAt
+    });
+    return true; // Lock berhasil diperoleh
   } catch (err) {
-    // Duplicate key error (E11000) means another campaign already has the lock
+    // Duplicate key error (E11000) = lock sudah dipegang campaign lain → skip
     if (err.code === 11000) {
-      logger.info(`[LOCK] Failed to acquire lock for user ${userId}: already locked`);
+      logger.info(`[LOCK] User ${userId} locked by another campaign, skipping ${campaignType}`);
       return false;
     }
-    // Other errors should be logged but treated as failed lock acquisition for safety
+    // Error lain: log tapi tetap return false (safe-fail)
     logger.error(`[LOCK] Error acquiring lock for user ${userId}:`, err.message);
     return false;
   }
