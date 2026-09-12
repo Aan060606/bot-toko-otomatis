@@ -13,7 +13,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent, DripLog, BroadcastLog } = require('../../database');
+  const { User, Product, Stock, Cart, Order, OrderItem, Setting, Discount, UserEvent, DripLog, BroadcastLog, CampaignLock } = require('../../database');
   await Promise.all([
     User.deleteMany({}),
     Product.deleteMany({}),
@@ -25,7 +25,8 @@ beforeEach(async () => {
     Discount.deleteMany({}),
     UserEvent.deleteMany({}),
     DripLog.deleteMany({}),
-    BroadcastLog.deleteMany({})
+    BroadcastLog.deleteMany({}),
+    CampaignLock.deleteMany({})
   ]);
 });
 

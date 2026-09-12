@@ -1,0 +1,1036 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1.1 Add marketing_messages_today and marketing_messages_reset_at fields to User schema": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860037
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110919434
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789111114794
+      }
+    ],
+    "1.2.1 Create CampaignLockSchema with TTL index": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860250
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789111121836
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789111291209
+      }
+    ],
+    "1.3.1 Add TTL index to DiscountSchema for automatic cleanup": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860346
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789111297951
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789112595859
+      }
+    ],
+    "1.4.1 Add separate TTL index for converted DripLog records": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860437
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789112602645
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789113770791
+      }
+    ],
+    "2.1.1 Implement checkAndIncrementRateLimit() function": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860528
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789113780456
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789113902052
+      }
+    ],
+    "2.2.1 Implement acquireCampaignLock() function": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860620
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789113916730
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789114074000
+      }
+    ],
+    "2.3.1 Implement isUserInCheckout() function": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860712
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789114081852
+      },
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789114617488
+      }
+    ],
+    "3.1.1 Capture historical last_active_at before classification": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860869
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789133245743
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789133379776
+      }
+    ],
+    "3.2.1 Add rate limit check to NON_BUYER campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110860968
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789133392840
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789133551023
+      }
+    ],
+    "3.2.2 Add rate limit check to CROSS_SELL campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861076
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789133563733
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134007967
+      }
+    ],
+    "3.2.3 Add rate limit check to VIP_WINBACK campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861236
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134020859
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134596826
+      }
+    ],
+    "3.2.4 Add rate limit check to DRIP campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861330
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134630574
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134815170
+      }
+    ],
+    "3.2.5 Add rate limit check to CART_ABANDON campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861453
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789134848218
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789135407230
+      }
+    ],
+    "3.2.6 Add rate limit check to REALTIME trigger": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861558
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789135421983
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789135833818
+      }
+    ],
+    "3.3.1 Add lock acquisition to NON_BUYER campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861676
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789135849405
+      },
+      {
+        "executionId": "7f37e334-8eb3-4c66-ab27-c112c017fa16",
+        "chatSessionId": "sess_63e2e5c2-a34c-4bc8-bae1-74eccf3038fb",
+        "timestamp": 1789135933465
+      }
+    ],
+    "3.3.2 Add lock acquisition to CROSS_SELL campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861769
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789137376814
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789137551230
+      }
+    ],
+    "3.3.3 Add lock acquisition to VIP_WINBACK campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861862
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789137564222
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789137746321
+      }
+    ],
+    "3.3.4 Add lock acquisition to DRIP campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110861949
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789137758871
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789138383520
+      }
+    ],
+    "3.3.5 Add lock acquisition to CART_ABANDON campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862031
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789138395646
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789138521724
+      }
+    ],
+    "3.4.1 Remove cooldown bypass for VIP_WINBACK campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862125
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789138535555
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789139110717
+      }
+    ],
+    "4.1.1 Add daily cleanup cron at 3 AM": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862287
+      },
+      {
+        "executionId": "3f332d7c-e29b-4a4e-9b36-102ea9bf7b92",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789139123395
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212269862
+      }
+    ],
+    "4.2.1 Increase WARM stage 2 discount from 10% to 15%": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862377
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789144199180
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789144442261
+      }
+    ],
+    "4.3.1 Add isUserQuietHour() check before sending": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862466
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789144455478
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145005219
+      }
+    ],
+    "4.4.1 Filter out sold-out products from recommendations": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862559
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145018889
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145549807
+      }
+    ],
+    "4.5.1 Change NON_BUYER schedule to :00 minutes": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862665
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145563753
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145715314
+      }
+    ],
+    "4.5.2 Change CROSS_SELL schedule to :15 minutes": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862777
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145730770
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145905880
+      }
+    ],
+    "4.5.3 Change VIP_WINBACK schedule to :30 minutes": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862877
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789145918436
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789146720635
+      }
+    ],
+    "4.5.4 Change DRIP schedule to :45 minutes": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110862976
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789146733722
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789147409106
+      }
+    ],
+    "5.1.1 Add 60-minute throttle check": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863063
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789147421978
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789147857227
+      }
+    ],
+    "5.2.1 Add checkout check to NON_BUYER campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863150
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789147872302
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789148497269
+      }
+    ],
+    "5.2.2 Add checkout check to CROSS_SELL campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863244
+      },
+      {
+        "executionId": "9b9e4f9a-6022-46d5-9628-311ef7f0929f",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789148510658
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212270859
+      }
+    ],
+    "5.2.3 Add checkout check to VIP_WINBACK campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863398
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789152225052
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789152372684
+      }
+    ],
+    "5.2.4 Add checkout check to DRIP campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863505
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789152380640
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789152958545
+      }
+    ],
+    "5.2.5 Add checkout check to CART_ABANDON campaign": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863596
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789152967656
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153209661
+      }
+    ],
+    "5.2.6 Add checkout check to REALTIME trigger": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863678
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153224135
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153470212
+      }
+    ],
+    "5.3.1 Find all discount creation locations in NON_BUYER": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863772
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153478936
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153887700
+      }
+    ],
+    "5.3.2 Find all discount creation locations in CROSS_SELL": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863867
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789153905781
+      },
+      {
+        "executionId": "bea38094-6f37-408b-a99f-cff0ae915acb",
+        "chatSessionId": "sess_4a3fa55c-3aaa-43e1-821c-fa7bd743c637",
+        "timestamp": 1789154758386
+      }
+    ],
+    "5.3.3 Find all discount creation locations in VIP_WINBACK": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110863959
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789172690448
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176503819
+      }
+    ],
+    "5.3.4 Find all discount creation locations in DRIP": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864058
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176519072
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176544237
+      }
+    ],
+    "5.3.5 Find all discount creation locations in CART_ABANDON": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864144
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176551417
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176568915
+      }
+    ],
+    "5.3.6 Find all discount creation locations in REALTIME": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864243
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176575802
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176600197
+      }
+    ],
+    "5.4.1 Apply rotation algorithm to WARM/COLD/GHOST segments": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864332
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176607281
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176881544
+      }
+    ],
+    "5.5.1 Change delay from 5 seconds to 30 seconds": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864427
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789176892372
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789177162572
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789177195807
+      }
+    ],
+    "6.1.1 Test checkAndIncrementRateLimit() with various counter states": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864519
+      },
+      {
+        "executionId": "477436b7-45c4-47cb-8ab2-1efca9bd6845",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789177216457
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212429344
+      }
+    ],
+    "6.1.2 Test acquireCampaignLock() atomic operations": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864622
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789178597998
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789179228657
+      }
+    ],
+    "6.1.3 Test isUserInCheckout() with pending/completed orders": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864718
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789179235642
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789179832135
+      }
+    ],
+    "6.1.4 Test segment classification with captured timestamps": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110864861
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789180143229
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789182261362
+      }
+    ],
+    "6.2.1 Full day simulation test": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865013
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789182269274
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789183494233
+      }
+    ],
+    "6.2.2 Concurrent campaign stress test": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865113
+      },
+      {
+        "executionId": "80190bf9-8d61-4ebe-9f5e-966843e32ddf",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789183501151
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212429489
+      }
+    ],
+    "6.2.3 Discount lifecycle test": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865209
+      },
+      {
+        "executionId": "df31a2da-eb11-4740-9379-a47b167110f9",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789204069873
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212429635
+      }
+    ],
+    "6.3.1 Verify existing campaign cooldown logic unchanged": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865301
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789204152502
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789204600527
+      }
+    ],
+    "6.3.2 Verify admin bypass functionality unchanged": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865390
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789204621662
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789205014745
+      }
+    ],
+    "6.3.3 Verify buyer bypass unchanged": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865484
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789205034068
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789205414717
+      }
+    ],
+    "6.3.4 Verify discount application logic unchanged": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865579
+      },
+      {
+        "executionId": "41d206b0-3929-49e6-a93b-bdf210bc3715",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789205431381
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212268485
+      }
+    ],
+    "6.3.5 Verify opt-out respect unchanged": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865673
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212269212
+      }
+    ],
+    "7.1.1 Run schema migration script": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865761
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212349828
+      }
+    ],
+    "7.2.1 Deploy to staging environment": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865861
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212350634
+      }
+    ],
+    "7.2.2 Deploy to production with rolling restart": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110865962
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212351545
+      }
+    ],
+    "7.3.1 Monitor rate limit effectiveness": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110866061
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212352109
+      }
+    ],
+    "7.3.2 Monitor lock acquisition": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110866171
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212352895
+      }
+    ],
+    "7.3.3 Monitor cleanup jobs": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110866267
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212354397
+      }
+    ],
+    "7.3.4 Monitor segment distribution": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110866362
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212354566
+      }
+    ],
+    "7.3.5 Monitor success metrics": [
+      {
+        "executionId": "ab095baa-337c-4999-99e1-e8c12cf1358f",
+        "chatSessionId": "sess_fb11e34c-67fc-4030-a846-b32d74be8372",
+        "timestamp": 1789110866461
+      },
+      {
+        "executionId": "911064c8-2c57-4d22-8a3c-0a326263bc97",
+        "chatSessionId": "sess_9b6b134c-af9c-4d9d-9554-d4c0488bbe61",
+        "timestamp": 1789212355309
+      }
+    ]
+  }
+}

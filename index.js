@@ -244,6 +244,9 @@ async function generateQRImage(qrString, donationId) {
 
 const activeIntervals = {};
 
+// [FIX #1] Global mutex to prevent double payment processing
+const processingOrders = new Set();
+
 function stopPolling(donationId) {
   if (activeIntervals[donationId]) {
     clearInterval(activeIntervals[donationId]);
@@ -269,12 +272,21 @@ async function notifyAdmin(text, parseMode = 'HTML') {
 }
 
 async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId) {
-  stopPolling(donationId);
-  if (qrMsgId) {
-    try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
+  // [FIX #1] Mutex check - prevent double processing
+  if (processingOrders.has(orderId)) {
+    logger.warn(`[MUTEX] Order ${orderId} already being processed. Skip duplicate call.`);
+    return;
   }
   
+  // Acquire lock
+  processingOrders.add(orderId);
+  
   try {
+    stopPolling(donationId);
+    if (qrMsgId) {
+      try { await ctx.telegram.deleteMessage(chatId, qrMsgId); } catch (_) {}
+    }
+
     const updatedOrder = await Order.findOneAndUpdate(
       { _id: orderId, status: 'PENDING' },
       { $set: { status: 'SUCCESS', success_processed_at: new Date() } },
@@ -306,7 +318,7 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     }
 
     let deliveries = await store.fulfillOrder(orderId);
-    
+
     // [FIX KRITIS] Jika deliveries kosong (item sudah di-fulfill sebelumnya tapi
     // pesan gagal terkirim ke user), recover konten dari DB dengan 3 jalur:
     // 1) stock_id di OrderItem (tersedia sejak fix BUG#6)
@@ -328,7 +340,15 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
         }
         // Jalur 3: ambil stok manapun untuk produk ini (unlimited digital)
         if (!stk) {
-          stk = await Stock.findOne({ product_id: it.product_id, content: { $exists: true, $ne: '' } }).lean();
+          // [FIX #5] Stock fallback filter - only use AVAILABLE or this order's stock
+          stk = await Stock.findOne({
+            product_id: it.product_id,
+            $or: [
+              { status: 'AVAILABLE' },      // Stock belum sold
+              { order_id: orderId }          // Stock assigned to this order
+            ],
+            content: { $exists: true, $ne: '' }
+          }).lean();
         }
         if (stk && stk.content) {
           deliveries.push({ product_id: it.product_id, content: stk.content });
@@ -549,6 +569,9 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
     // ──────────────────────────────────────────────────────────────────────
   } catch (err) {
     logger.error(err);
+  } finally {
+    // [FIX #1] Always release mutex lock
+    processingOrders.delete(orderId);
   }
 }
 
@@ -596,20 +619,47 @@ function pollPaymentStatus(ctx, donationId, chatId, msgId, orderId, qrMsgId) {
             // [FIX BUG#2] Circuit breaker: hentikan polling setelah 10 CF failure berturut-turut
             // Sebelumnya: retry tanpa batas = 631 CF challenge dalam 7 hari, CPU terbuang
             if (cfFailCount >= 10) {
-              logger.warn(`[CIRCUIT BREAKER] CF gagal ${cfFailCount}x berturut-turut untuk ${donationId}. Hentikan polling, notif admin.`);
+              logger.warn(`[CIRCUIT BREAKER] CF gagal ${cfFailCount}x berturut-turut untuk ${donationId}. Manual review needed.`);
               stopPolling(donationId);
-              // [FIX BUG#CB-STUCK] Mark order EXPIRED agar tidak stuck PENDING selamanya
-              // Sebelumnya: stopPolling saja tapi order tetap PENDING → stuck_pending terus
+              
+              // [FIX #4] DON'T expire - set to PENDING_REVIEW instead
+              // Sebelumnya: mark EXPIRED → user sudah bayar tapi order dihapus → kerugian!
               try {
-                await Order.findByIdAndUpdate(orderId, { status: 'EXPIRED', expired_reason: 'circuit_breaker' });
-                await handleOrderExpired(ctx, chatId, msgId, orderId);
+                await Order.findByIdAndUpdate(orderId, {
+                  status: 'PENDING_REVIEW',
+                  cf_failures: cfFailCount,
+                  needs_manual_review: true,
+                  review_reason: 'cloudflare_circuit_breaker',
+                  review_started_at: new Date()
+                });
+                
+                // Notify user - payment verification in progress
+                await ctx.telegram.sendMessage(chatId,
+                  `⏳ <b>Pembayaran Anda Sedang Diverifikasi</b>\n\n` +
+                  `Sistem kami mengalami kendala teknis sementara.\n\n` +
+                  `✅ Jika Anda sudah transfer, <b>JANGAN TRANSFER LAGI</b>.\n` +
+                  `🔍 Verifikasi manual maksimal 1 jam.\n` +
+                  `📦 Produk akan dikirim otomatis setelah verifikasi.\n\n` +
+                  `Order ID: <code>${orderId}</code>`,
+                  { parse_mode: 'HTML' }
+                ).catch(() => {});
               } catch (_) {}
-              // Notif admin agar bisa manual follow-up
+              
+              // Alert admin with HIGH priority
               const adminId = process.env.ADMIN_CHAT_ID;
               if (adminId) {
                 const order = await Order.findById(orderId).lean();
                 bot.telegram.sendMessage(adminId,
-                  `⚠️ <b>CIRCUIT BREAKER AKTIF</b>\n\nCloudflare gagal bypass <b>${cfFailCount}x berturut-turut</b> untuk:\n• Order: <code>${orderId}</code>\n• User: <code>${chatId}</code>\n• Produk: ${order?.product_name || '?'}\n\n<b>Aksi:</b> Jika user konfirmasi sudah bayar, gunakan <code>/rescue ${chatId}</code> untuk kirim produk manual.`,
+                  `🚨 <b>URGENT: PAYMENT VERIFICATION NEEDED</b>\n\n` +
+                  `CF Circuit Breaker Triggered\n\n` +
+                  `Order: <code>${orderId}</code>\n` +
+                  `User: <code>${chatId}</code>\n` +
+                  `Amount: Rp${order?.total_amount?.toLocaleString('id-ID') || '?'}\n` +
+                  `Product: ${order?.product_name || '?'}\n\n` +
+                  `<b>ACTION REQUIRED:</b>\n` +
+                  `1. Check Saweria dashboard for payment\n` +
+                  `2. If paid: <code>/rescue ${chatId}</code>\n` +
+                  `3. If not paid after 30min: mark expired`,
                   { parse_mode: 'HTML' }
                 ).catch(() => {});
               }
@@ -792,10 +842,10 @@ bot.use(async (ctx, next) => {
     // [REALTIME MARKETING] Trigger SETIAP user aktif — bukan jam 10:00 pagi
     // Cooldown 48 jam dihandle di dalam triggerRealtimeMarketing (cek last_broadcast_at)
     // Jadi aman dipanggil setiap user kirim pesan — tidak akan spam
-    // Delay 5 detik: user baca respons bot dulu, baru dapat marketing
+    // [FIX BUG #15] Delay 30 detik: give users time to explore naturally before marketing
     setTimeout(() => {
       scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
-    }, 5000);
+    }, 30000);
   }
   return next();
 });
@@ -1368,6 +1418,44 @@ async function handleFixDb(ctx) {
 
 bot.command("fix_db", async (ctx) => {
   return handleFixDb(ctx);
+});
+
+// [FIX #4] Manual rescue command for stuck PENDING_REVIEW orders
+bot.command('rescue', async (ctx) => {
+  if (!admin.isAdmin(ctx)) return ctx.reply('⛔ Admin only');
+  
+  const args = ctx.message.text.split(' ');
+  const userId = args[1];
+  
+  if (!userId) {
+    return ctx.reply('Format: /rescue <user_id>');
+  }
+  
+  // Find PENDING_REVIEW orders for this user
+  const orders = await Order.find({
+    user_id: Number(userId),
+    status: 'PENDING_REVIEW'
+  }).lean();
+  
+  if (orders.length === 0) {
+    return ctx.reply(`No pending review orders for user ${userId}`);
+  }
+  
+  // Show orders to admin
+  let msg = `Found ${orders.length} order(s) needing review:\n\n`;
+  orders.forEach((o, i) => {
+    msg += `${i+1}. Order ${o._id}\n`;
+    msg += `   Amount: Rp${o.total_amount?.toLocaleString('id-ID')}\n`;
+    msg += `   Created: ${o.created_at?.toLocaleString('id-ID')}\n\n`;
+  });
+  msg += `Reply with order number to approve (1-${orders.length}):`;
+  
+  await ctx.reply(msg);
+  
+  // Store in session for next handler
+  ctx.session = ctx.session || {};
+  ctx.session.rescue_orders = orders;
+  ctx.session.rescue_user_id = userId;
 });
 
 async function handleResetDb(ctx) {
@@ -2734,6 +2822,48 @@ bot.action(/^cancel_order_(.+)$/, async (ctx) => {
   await ctx.editMessageText('❌ Checkout dibatalkan.\n\nKapan pun mau kembali, ketuk /start ya!', { parse_mode: 'HTML' });
 });
 
+// [FIX #4] Handle rescue approval (when admin replies with number)
+bot.on('text', async (ctx, next) => {
+  // Check if admin is in rescue mode
+  if (admin.isAdmin(ctx) && ctx.session?.rescue_orders) {
+    const num = parseInt(ctx.message.text);
+    if (!isNaN(num) && num >= 1 && num <= ctx.session.rescue_orders.length) {
+      const order = ctx.session.rescue_orders[num - 1];
+      
+      try {
+        // Process the payment manually
+        await Order.findByIdAndUpdate(order._id, {
+          status: 'SUCCESS',
+          success_processed_at: new Date(),
+          manual_rescue: true,
+          rescued_by: ctx.from.id
+        });
+        
+        const mockCtx = { telegram: bot.telegram };
+        await onPaymentSuccess(
+          mockCtx,
+          order.user_id,
+          order.status_msg_id,
+          order.donation_id,
+          order._id,
+          order.qr_msg_id
+        );
+        
+        await ctx.reply(`✅ Order ${order._id} rescued! Product sent to user ${order.user_id}.`);
+      } catch (err) {
+        await ctx.reply(`❌ Rescue failed: ${err.message}`);
+      }
+      
+      // Clear session
+      delete ctx.session.rescue_orders;
+      delete ctx.session.rescue_user_id;
+      return;
+    }
+  }
+  
+  return next();
+});
+
 bot.on('text', async (ctx, next) => {
   // Hanya respon di private chat, hindari spam jika bot masuk grup
   if (ctx.chat && ctx.chat.type !== 'private') return next();
@@ -2770,6 +2900,20 @@ async function handleTestPay(ctx) {
   await ctx.reply(`🔄 [QA TEST: PAY-03]\nMemalsukan status pembayaran gateway...\n✅ Mocking API Status: SETTLEMENT / PAID / CAPTURE\n✅ Mengeksekusi callback success untuk ${orderId}...`);
   await onPaymentSuccess(ctx, ctx.chat.id, order.status_msg_id, order.donation_id, orderId, order.qr_msg_id);
 }
+
+// USER: Opt-Out dari pesan promosi
+bot.command('stop_promo', async (ctx) => {
+  const userId = ctx.from.id;
+  await User.findByIdAndUpdate(userId, { opt_out: true, opt_out_at: new Date() });
+  await replySafe(ctx, "✅ <b>Berhasil Unsubscribe</b>\n\nAnda telah berhenti berlangganan dari pesan promosi otomatis. Anda hanya akan menerima notifikasi transaksi (seperti pengingat invoice) dari bot ini.\n\n<i>Ketik /start_promo jika Anda berubah pikiran di masa depan.</i>", { parse_mode: "HTML" });
+});
+
+// USER: Opt-In kembali ke pesan promosi
+bot.command('start_promo', async (ctx) => {
+  const userId = ctx.from.id;
+  await User.findByIdAndUpdate(userId, { opt_out: false, opt_out_at: null });
+  await replySafe(ctx, "✅ <b>Berhasil Subscribe Kembali</b>\n\nAnda akan kembali menerima penawaran eksklusif dan diskon flash sale dari kami.", { parse_mode: "HTML" });
+});
 
 bot.command("testpay", async (ctx) => {
   return handleTestPay(ctx);

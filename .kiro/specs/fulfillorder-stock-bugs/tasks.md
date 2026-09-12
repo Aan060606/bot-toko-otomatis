@@ -155,7 +155,7 @@
     - Konfirmasi: delivery normal tetap berjalan, idempotency tidak merusak panggilan pertama, segmen non-HOT tidak terpengaruh
     - _Requirements: 3.1–3.8 (store.js), 3.9–3.11 (index.js), 3.12, 3.13 (jest), 3.14, 3.15 (scheduler.js)_
 
-- [~] 4. Checkpoint — Pastikan semua test pass
+- [-] 4. Checkpoint — Pastikan semua test pass
   - Jalankan full test suite: `npm test`
   - Pastikan tidak ada `Validation Warning: Unknown option "runInBand"` di output Jest
   - Pastikan semua test yang sebelumnya pass tetap pass (tidak ada regresi)

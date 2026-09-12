@@ -19,7 +19,7 @@
  * Template  : Bisa diubah Admin via /set_msg
  */
 
-const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult, CronProgress } = require('./database');
+const { User, UserEvent, Order, OrderItem, Product, DripLog, BroadcastLog, Setting, Discount, ABTestResult, CronProgress, Stock } = require('./database');
 const { Markup } = require('telegraf');
 const logger     = require('./logger');
 const store      = require('./store'); // Required to check global discounts
@@ -45,6 +45,110 @@ function isUserQuietHour(user) {
     return true; 
   }
   return false;
+}
+
+// [FIX BUG #2] Global rate limit: max 3 marketing messages per user per day
+// Checks and increments the daily marketing message counter
+// Returns true if allowed to send (< 3 messages today), false if rate limit exceeded
+async function checkAndIncrementRateLimit(userId) {
+  const user = await User.findById(userId);
+  if (!user) return false;
+  
+  // Admin bypass
+  if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return true;
+  
+  const now = new Date();
+  const jakartaNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+  
+  // Reset counter if past midnight
+  if (user.marketing_messages_reset_at && now >= user.marketing_messages_reset_at) {
+    const nextMidnight = new Date(jakartaNow);
+    nextMidnight.setHours(24, 0, 0, 0);
+    
+    await User.findByIdAndUpdate(userId, {
+      marketing_messages_today: 0,
+      marketing_messages_reset_at: nextMidnight
+    });
+    user.marketing_messages_today = 0;
+  }
+  
+  // Check rate limit (max 3/day)
+  if (user.marketing_messages_today >= 3) {
+    logger.info(`[RATE_LIMIT] User ${userId} exceeded 3 messages/day limit`);
+    return false; // Rate limit exceeded
+  }
+  
+  // Increment counter
+  await User.findByIdAndUpdate(userId, {
+    $inc: { marketing_messages_today: 1 }
+  });
+  
+  return true; // Allowed to send
+}
+
+// [FIX BUG #3] Distributed locking to prevent race conditions between concurrent campaigns
+// Acquires an atomic lock for a user on a specific date using MongoDB's findOneAndUpdate
+// Returns true if lock acquired (can proceed), false if lock already held by another campaign
+async function acquireCampaignLock(userId, campaignType) {
+  const { CampaignLock } = require('./database');
+  
+  // Generate lock key with format: campaign_lock_{userId}_{YYYY-MM-DD}
+  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+  const lockKey = `campaign_lock_${userId}_${today}`;
+  
+  // Lock expires in 1 hour (TTL)
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+  
+  try {
+    // Atomic operation: create lock only if it doesn't exist
+    // $setOnInsert ensures fields are only set when a new document is created (upserted)
+    const result = await CampaignLock.findOneAndUpdate(
+      { lock_key: lockKey },
+      { 
+        $setOnInsert: { 
+          campaign_type: campaignType, 
+          acquired_at: new Date(),
+          expires_at: expiresAt
+        }
+      },
+      { upsert: true, new: true, rawResult: true }
+    );
+    
+    // If upserted (created new document), we successfully acquired the lock
+    // If document already existed, another campaign has the lock
+    return result.lastErrorObject.upserted !== undefined;
+  } catch (err) {
+    // Duplicate key error (E11000) means another campaign already has the lock
+    if (err.code === 11000) {
+      logger.info(`[LOCK] Failed to acquire lock for user ${userId}: already locked`);
+      return false;
+    }
+    // Other errors should be logged but treated as failed lock acquisition for safety
+    logger.error(`[LOCK] Error acquiring lock for user ${userId}:`, err.message);
+    return false;
+  }
+}
+
+// [FIX BUG #11] Check if user currently has a pending order in checkout
+// Returns true if user is in checkout (has PENDING order), false otherwise
+// Purpose: Prevent marketing messages from interrupting active payment flows
+async function isUserInCheckout(userId) {
+  const { Order } = require('./database');
+  
+  try {
+    // Query for any pending order for this user
+    const pendingOrder = await Order.findOne({ 
+      user_id: userId, 
+      status: 'PENDING' 
+    }).lean();
+    
+    // Return true if pending order exists (user is in checkout)
+    return pendingOrder !== null;
+  } catch (err) {
+    // On error, assume user is in checkout (fail-safe to prevent interruption)
+    logger.error(`[CHECKOUT_CHECK] Error checking pending order for user ${userId}:`, err.message);
+    return true;
+  }
 }
 
 async function getSetting(key, defaultVal) {
@@ -349,11 +453,16 @@ function isInCooldown(user, { bypassForBuyer = false, overrideCooldownMs = null,
   // Jika campaign yang akan dikirim SAMA (atau dalam grup funnel yang sama) dengan campaign sebelumnya,
   // skip cooldown lintas-funnel (misal progresi internal funnel Cart Abandon stage 1 -> stage 2)
   if (currentCampaign && user.last_promo_campaign && user.last_promo_campaign.startsWith(currentCampaign)) {
-    // [FIX BUG#2] Guard 5 menit: Jangan bypass jika pesan terakhir baru saja terkirim beberapa menit/detik lalu.
-    // Ini mencegah spam beruntun dalam 1 kali run cron akibat loop multi-produk.
-    const MIN_BYPASS_AGE_MS = 5 * 60 * 1000;
-    if (!user.last_broadcast_at || (new Date() - new Date(user.last_broadcast_at)) >= MIN_BYPASS_AGE_MS) {
-      return false;
+    // [FIX BUG #4] VIP_WINBACK should NOT bypass cooldown - enforce full 48-hour cooldown
+    if (currentCampaign === 'VIP_WINBACK') {
+      // Do not bypass - fall through to normal cooldown check
+    } else {
+      // [FIX BUG #4] For other campaigns, increase MIN_BYPASS_AGE_MS from 5 minutes to 48 hours
+      // This prevents spam while allowing funnel progression after sufficient time
+      const MIN_BYPASS_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
+      if (!user.last_broadcast_at || (new Date() - new Date(user.last_broadcast_at)) >= MIN_BYPASS_AGE_MS) {
+        return false;
+      }
     }
   }
   
@@ -598,9 +707,26 @@ async function runNonBuyerCampaign(bot) {
     if (isUserQuietHour(user)) { stats.skipped++; continue; }
     if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
 
+    // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+    const gotLock = await acquireCampaignLock(user._id, 'NON_BUYER');
+    if (!gotLock) {
+      logger.info(`[LOCK] User ${user._id} locked by another campaign, skipping NON_BUYER`);
+      stats.skipped++;
+      continue;
+    }
+
+    // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+    if (await isUserInCheckout(user._id)) {
+      logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping NON_BUYER to avoid payment flow interruption`);
+      stats.skipped++;
+      continue;
+    }
+
     // [FIX] Cek semua produk, skip hanya jika SEMUA produk sudah ada drip aktif
-    const existingDrips = await DripLog.find({ user_id: user._id, converted: false, stage: { $gt: 0 } }).lean();
-    const dripProductIds = new Set(existingDrips.map(d => String(d.product_id)));
+    // [FIX C-2] Gunakan $gte: 0 agar user yang di-recycle (stage 0) ikut terdeteksi
+    // Sebelumnya: $gt: 0 → stage 0 tidak pernah ditemukan → stage0Drip selalu undefined
+    const existingDrips = await DripLog.find({ user_id: user._id, converted: false, stage: { $gte: 0 } }).lean();
+    const dripProductIds = new Set(existingDrips.filter(d => d.stage > 0).map(d => String(d.product_id)));
     const allProductsHaveDrip = allProducts.every(p => dripProductIds.has(String(p._id)));
     if (existingDrips.length > 0) {
       const stage0Drip = existingDrips.find(d => d.stage === 0);
@@ -609,6 +735,12 @@ async function runNonBuyerCampaign(bot) {
     }
 
     const segment = await classifyNonBuyer(user);
+
+    // Jika opt-out dan BUKAN Cart Abandonment, lompat.
+    if (user.opt_out && segment !== 'CART_ABANDON') {
+      stats.skipped++; 
+      continue; 
+    }
 
     // [FIX DISKON] Semua segment dapat diskon — bukan hanya COLD/GHOST!
     // HOT = baru aktif, kasih diskon kecil sebagai insentif pertama
@@ -671,7 +803,8 @@ async function runNonBuyerCampaign(bot) {
             `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
       } else if (segment === 'WARM') {
         const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
-        const p = prodList[0];
+        // [FIX BUG #13] Apply rotation to WARM segment for fair product exposure
+        const p = prodList[rotationIndex] || prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
         // [FIX] WARM sekarang dapat diskon 10% — sebutkan di copy!
         msg = isJAV
@@ -688,7 +821,8 @@ async function runNonBuyerCampaign(bot) {
             `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
       } else {
         // COLD/GHOST = sudah lama tidak aktif, butuh re-engagement + diskon besar
-        const p = prodList[0];
+        // [FIX BUG #13] Apply rotation to COLD/GHOST segments for fair product exposure
+        const p = prodList[rotationIndex] || prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
         msg = isJAV
           ? `🎁 <b>Diskon ${discountVal}% khusus buat kamu!</b>\n\n` +
@@ -709,7 +843,7 @@ async function runNonBuyerCampaign(bot) {
     // [FIX BUG#DISC-DUP] Cek duplikat dulu — jangan buat diskon baru jika user
     // sudah punya diskon aktif yang belum expired. Ini mencegah DB bloat
     // (sebelumnya: 1.813 records untuk 485 user = 3.7 diskon/user rata-rata)
-    if (discountVal > 0) {
+    if (discountVal > 0 && !user.opt_out) {
       const existingDisc = await Discount.findOne({
         target_user_id: Number(user._id),
         active: true,
@@ -741,6 +875,14 @@ async function runNonBuyerCampaign(bot) {
     const sendOpts  = promoMediaArr
       ? { mediaGroup: promoMediaArr, keyboard, campaign: `NON_BUYER_${segment}`, userName: user.first_name || '?', reason: firstPromo?.name || '-' }
       : { media: promoImg, mediaType: promoType, keyboard, campaign: `NON_BUYER_${segment}`, userName: user.first_name || '?', reason: firstPromo?.name || '-' };
+
+    // [FIX BUG #2] Check global rate limit (max 3 messages/day)
+    const canSend = await checkAndIncrementRateLimit(user._id);
+    if (!canSend) {
+      logger.info(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day, skipping NON_BUYER campaign`);
+      stats.skipped++;
+      continue;
+    }
 
     const result = await sendSafe(bot, user._id, msg, sendOpts);
     if (result.ok) {
@@ -854,6 +996,7 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
   const partialBuyers = await User.find({ 
     purchase_count: { $gt: 0 }, 
     is_blocked: { $ne: true },
+    opt_out: { $ne: true },  // [PRESERVE REQ 3.15] Skip opted-out users
     last_active_at: { $gte: sixtyDaysAgo }
   }).lean();
   const totalCount = allProducts.length;
@@ -863,6 +1006,21 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
   const hFile = await getSetting("header_file_id", "https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif");
 
   for (const user of partialBuyers) {
+    // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+    const gotLock = await acquireCampaignLock(user._id, 'CROSS_SELL');
+    if (!gotLock) {
+      logger.info(`[LOCK] User ${user._id} locked by another campaign, skipping CROSS_SELL campaign`);
+      stats.skipped++;
+      continue;
+    }
+
+    // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+    if (await isUserInCheckout(user._id)) {
+      logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping CROSS_SELL to avoid payment flow interruption`);
+      stats.skipped++;
+      continue;
+    }
+
     if (isInCooldown(user, { currentCampaign: 'VIP_WINBACK' })) { stats.skipped++; continue; }
 
     const boughtIds = await getBoughtProductIds(user._id);
@@ -870,6 +1028,17 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
 
     const targetProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, globalTopProducts, similarityMap);
     if (!targetProduct) { stats.skipped++; continue; }
+
+    // [FIX BUG #8] Validate stock availability before recommendation
+    const stockCount = await Stock.countDocuments({
+      product_id: targetProduct._id,
+      status: 'AVAILABLE'
+    });
+    if (stockCount === 0) {
+      logger.info(`[CROSS_SELL] Product ${targetProduct._id} (${targetProduct.name}) is sold out, skipping user ${user._id}`);
+      stats.skipped++;
+      continue;
+    }
 
     // [FIX] Guard duplikat: skip jika sudah pernah dapat cross-sell produk ini hari ini
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
@@ -934,6 +1103,14 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
             `✅ Konten eksklusif\n✅ Update rutin\n✅ Akses permanen\n\n` +
             `<blockquote>Banyak member ${boughtNames} juga aktif di ${tgt}.</blockquote>\n\n` +
             `👇 <b>Upgrade Sekarang</b>`;
+    }
+
+    // [FIX BUG #2] Check global rate limit (max 3 messages/day)
+    const canSend = await checkAndIncrementRateLimit(user._id);
+    if (!canSend) {
+      logger.info(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day, skipping CROSS_SELL campaign`);
+      stats.skipped++;
+      continue;
     }
 
     const keyboard = await buildProductMarkup(user._id, targetProduct);
@@ -1099,13 +1276,30 @@ async function runDripFollowUp(bot) {
   for (const log of stage1Logs) {
     try {
       const user = await User.findById(log.user_id).lean();
-      if (!user || user.is_blocked) {
+      if (!user || user.is_blocked || user.opt_out) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 2 });
+        if (user && user.opt_out) stats.skipped++;
+        continue;
+      }
+
+      // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+      if (await isUserInCheckout(user._id)) {
+        logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping DRIP Stage 2 to avoid payment flow interruption`);
+        stats.skipped++;
+        continue;
+      }
+
+      // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+      const gotLock = await acquireCampaignLock(user._id, 'DRIP');
+      if (!gotLock) {
+        console.log(`[LOCK] User ${user._id} locked by another campaign - skipping DRIP Stage 2`);
+        stats.skipped++;
         continue;
       }
 
       // [FIX SPAM] Cek cooldown — max 1 drip per user per hari (walau punya banyak produk)
-      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      // [FIX H-2] Drip S2 pakai 'DRIP' bukan 'NON_BUYER' agar cooldown funnel tepat
+      if (isInCooldown(user, { currentCampaign: 'DRIP' })) { stats.skipped++; continue; }
       if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
@@ -1163,11 +1357,28 @@ async function runDripFollowUp(bot) {
           `<blockquote>Semakin telat gabung = semakin banyak konten yang kamu lewatin.</blockquote>\n\n` +
           `👇 <b>Gabung Sekarang</b>`;
 
-      // [FIX S2 DISKON] S2 juga dapat diskon kecil (5%) agar tombol terlihat lebih menarik
+      // [FIX S2 DISKON] Stage 2 uses segment-based progressive discounts
+      // [FIX BUG #6] WARM segment gets 15% at stage 2 (progressive from 10% at stage 1)
       let keyboard = null;
       if (product) {
-        const s2DiscAmt = Math.floor((product.price || 0) * 0.05); // 5% discount di S2
+        // Classify user segment for progressive discount
+        const segment = await classifyNonBuyer(user);
+        let discountVal = 0;
+        if      (segment === 'HOT')   discountVal = 5;   // 5% — gentle nudge
+        else if (segment === 'WARM')  discountVal = 15;  // 15% — PROGRESSIVE from 10% at S1 (Bug #6 fix)
+        else if (segment === 'COLD')  discountVal = 15;  // 15% — re-engagement
+        else if (segment === 'GHOST') discountVal = 20;  // 20% — last effort
+        
+        const s2DiscAmt = Math.floor((product.price || 0) * (discountVal / 100));
         keyboard = await buildProductMarkup(user._id, product, s2DiscAmt);
+      }
+
+      // [FIX BUG #2] Check global rate limit before sending
+      const canSend = await checkAndIncrementRateLimit(user._id);
+      if (!canSend) {
+        console.log(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day - skipping DRIP Stage 2`);
+        stats.skipped++;
+        continue;
       }
 
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S2', userName: user.first_name || '?', reason: String(log.product_id) });
@@ -1202,12 +1413,30 @@ async function runDripFollowUp(bot) {
   for (const log of stage2Logs) {
     try {
       const user = await User.findById(log.user_id).lean();
-      if (!user || user.is_blocked) {
+      if (!user || user.is_blocked || user.opt_out) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 3 });
+        if (user && user.opt_out) stats.skipped++;
         continue;
       }
+
+      // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+      if (await isUserInCheckout(user._id)) {
+        logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping DRIP Stage 3 to avoid payment flow interruption`);
+        stats.skipped++;
+        continue;
+      }
+
+      // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+      const gotLock = await acquireCampaignLock(user._id, 'DRIP');
+      if (!gotLock) {
+        console.log(`[LOCK] User ${user._id} locked by another campaign - skipping DRIP Stage 3`);
+        stats.skipped++;
+        continue;
+      }
+
       // [FIX SPAM] Max 1 drip per user per hari
-      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      // [FIX H-2] Drip S3 pakai 'DRIP' bukan 'NON_BUYER'
+      if (isInCooldown(user, { currentCampaign: 'DRIP' })) { stats.skipped++; continue; }
       if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       if (log.campaign_type === 'NON_BUYER' && user.purchase_count > 0) {
@@ -1250,6 +1479,14 @@ async function runDripFollowUp(bot) {
       let keyboard = null;
       if (product) keyboard = await buildProductMarkup(user._id, product, discountAmount);
 
+      // [FIX BUG #2] Check global rate limit before sending
+      const canSend = await checkAndIncrementRateLimit(user._id);
+      if (!canSend) {
+        console.log(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day - skipping DRIP Stage 3`);
+        stats.skipped++;
+        continue;
+      }
+
       const result = await sendSafe(bot, user._id, msg, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S3', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 3, sent_at: new Date() });
@@ -1264,7 +1501,7 @@ async function runDripFollowUp(bot) {
         if (!existingS3Disc) {
           await Discount.findOneAndUpdate(
             { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
-            { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+            { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
             { upsert: true }
           );
         }
@@ -1293,12 +1530,30 @@ async function runDripFollowUp(bot) {
   for (const log of stage3Logs) {
     try {
       const user = await User.findById(log.user_id).lean();
-      if (!user || user.is_blocked) {
+      if (!user || user.is_blocked || user.opt_out) {
         await DripLog.findByIdAndUpdate(log._id, { converted: true, stage: 4 });
+        if (user && user.opt_out) stats.skipped++;
         continue;
       }
+
+      // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+      if (await isUserInCheckout(user._id)) {
+        logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping DRIP Stage 4 to avoid payment flow interruption`);
+        stats.skipped++;
+        continue;
+      }
+
+      // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+      const gotLock = await acquireCampaignLock(user._id, 'DRIP');
+      if (!gotLock) {
+        console.log(`[LOCK] User ${user._id} locked by another campaign - skipping DRIP Stage 4`);
+        stats.skipped++;
+        continue;
+      }
+
       // [FIX SPAM] Max 1 drip per user per hari
-      if (isInCooldown(user, { currentCampaign: 'NON_BUYER' })) { stats.skipped++; continue; }
+      // [FIX H-2] Drip S4 pakai 'DRIP' bukan 'NON_BUYER'
+      if (isInCooldown(user, { currentCampaign: 'DRIP' })) { stats.skipped++; continue; }
       if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
       const product = await Product.findById(log.product_id).lean();
@@ -1321,15 +1576,25 @@ async function runDripFollowUp(bot) {
         `💰 <b>Diskon ${stage4DiscPct}% → Harga jadi Rp ${finalPrice.toLocaleString('id-ID')}</b>\n` +
         `⏳ Berlaku 72 jam saja.\n\n` +
         `<blockquote>Setelah ini tidak ada lagi penawaran harga khusus untuk produk ini.</blockquote>\n\n` +
-        `👇 <b>Ini Kesempatan Terakhir Saya</b>`;
+        `👇 <b>Ini Kesempatan Terakhir Saya</b>\n\n` +
+        `<i>Ketik /stop_promo jika tidak ingin menerima pesan penawaran lagi.</i>`;
 
       const keyboard = await buildProductMarkup(user._id, product, discountAmount);
+
+      // [FIX BUG #2] Check global rate limit before sending
+      const canSend = await checkAndIncrementRateLimit(user._id);
+      if (!canSend) {
+        console.log(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day - skipping DRIP Stage 4`);
+        stats.skipped++;
+        continue;
+      }
+
       const result = await sendSafe(bot, user._id, msgStage4, { media: mediaFile, mediaType, keyboard, campaign: 'NON_BUYER_DRIP_S4', userName: user.first_name || '?', reason: String(log.product_id) });
       if (result.ok) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
         await Discount.findOneAndUpdate(
           { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
-          { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
+          { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
           { upsert: true }
         );
         stats.sent++;
@@ -1358,9 +1623,10 @@ async function runDripFollowUp(bot) {
   for (const log of stage4Logs) {
     try {
       const user = await User.findById(log.user_id).lean();
-      if (!user || user.is_blocked || user.purchase_count > 0) {
-        // Jika ternyata sudah beli atau diblokir, tutup saja selamanya
+      if (!user || user.is_blocked || user.purchase_count > 0 || user.opt_out) {
+        // Jika ternyata sudah beli, diblokir, atau opt_out, tutup saja selamanya
         await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'CLEANUP' });
+        if (user && user.opt_out) stats.skipped++;
         continue;
       }
       if (isUserQuietHour(user)) { stats.skipped++; continue; }
@@ -1406,7 +1672,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage1) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || user.opt_out || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
     if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
     const product = await Product.findById(log.product_id).lean();
@@ -1452,10 +1718,12 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage2) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || user.opt_out || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
     if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
-    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, arguments[3], arguments[4]); // arguments[3] = globalTop, arguments[4] = simMap
+    // [FIX C-3] Deklarasikan boughtIds di dalam loop — sebelumnya undefined → ReferenceError crash
+    const boughtIds = await getBoughtProductIds(user._id);
+    const nextProduct = await getSmartRecommendation(user._id, boughtIds, allProducts, cachedGlobalTopProducts, cachedSimilarityMap);
     if (!nextProduct) {
       await DripLog.findByIdAndUpdate(log._id, { converted: true, exited_reason: 'COMPLETE' });
       continue;
@@ -1505,7 +1773,7 @@ async function runPostPurchaseFollowUp(bot) {
 
   for (const log of ppStage3Done) {
     const user = await User.findById(log.user_id).lean();
-    if (!user || user.is_blocked || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
+    if (!user || user.is_blocked || user.opt_out || isUserQuietHour(user) || isInCooldown(user, { bypassForBuyer: true, currentCampaign: 'POST_PURCHASE' })) { stats.skipped++; continue; }
     if (sentThisExecution.has(String(user._id))) { stats.skipped++; continue; }
 
     const boughtIds = await getBoughtProductIds(user._id);
@@ -1525,21 +1793,23 @@ async function runPostPurchaseFollowUp(bot) {
       `<b>${totalBuyers}+ member</b> sudah punya akses lengkap — kamu bisa jadi salah satunya.\n\n` +
       `Upgrade ke <b>${nextProduct.name}</b> dengan:\n` +
       `💰 <b>Diskon 15% — Rp${discPrice.toLocaleString('id-ID')}</b> (normal Rp${nextProduct.price.toLocaleString('id-ID')})\n` +
-      `⏳ Hanya berlaku <b>48 jam</b>\n\n` +
+      `⏳ Hanya berlaku <b>24 jam</b>\n\n` +
       `<blockquote>Setelah ini tidak ada penawaran lagi. Harga kembali normal.</blockquote>\n\n` +
-      `👇 <b>Klaim Diskon Terakhir</b>`;
-
-    await Discount.findOneAndUpdate(
-      { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), trigger_event: 'CROSS_SELL', type: 'PERCENTAGE', active: true },
-      { $set: { value: 15, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
-      { upsert: true }
-    );
+      `👇 <b>Klaim Diskon Terakhir</b>\n\n` +
+      `<i>Ketik /stop_promo jika tidak ingin menerima pesan penawaran lagi.</i>`;
 
     const keyboard = await buildProductMarkup(user._id, nextProduct);
     const media    = nextProduct.promo_image_id || hFile;
     const mType    = nextProduct.promo_image_id ? (nextProduct.promo_media_type || 'photo') : hType;
     const result2  = await sendSafe(bot, user._id, msg, { media, mediaType: mType, keyboard, campaign: 'POST_PURCHASE_S4_FINAL', userName: user.first_name || '?', reason: 'cross_sell_15' });
     if (result2.ok) {
+      // [FIX H-5] Simpan diskon SETELAH pesan berhasil dikirim, bukan sebelumnya
+      // Sebelumnya: diskon dibuat lalu pesan gagal → diskon bocor ke DB tanpa pesan
+      await Discount.findOneAndUpdate(
+        { target_user_id: Number(user._id), target_product_id: String(nextProduct._id), trigger_event: 'CROSS_SELL', type: 'PERCENTAGE', active: true },
+        { $set: { value: 15, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
+        { upsert: true }
+      );
       await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
       stats.sent++;
       sentThisExecution.add(String(user._id));
@@ -1610,6 +1880,22 @@ async function runCartAbandonCampaign(bot) {
   for (const drip of pendingCA) {
     const user = await User.findById(drip.user_id).lean();
     if (!user || user.is_blocked) { stats.skipped++; continue; }
+    
+    // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+    if (await isUserInCheckout(user._id)) {
+      logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping CART_ABANDON to avoid payment flow interruption`);
+      stats.skipped++;
+      continue;
+    }
+    
+    // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+    const gotLock = await acquireCampaignLock(user._id, 'CART_ABANDON');
+    if (!gotLock) {
+      logger.info(`[LOCK] User ${user._id} locked by another campaign, skipping CART_ABANDON`);
+      stats.skipped++;
+      continue;
+    }
+    
     // Cart abandon non-buyer bypass cooldown 48 jam, TAPI tetap butuh jeda minimal 2 jam 
     // agar tidak bertabrakan agresif jika baru dapat promo lain.
     // Buyer tetap pakai cooldown normal 48 jam (di-skip jika < 48 jam).
@@ -1688,11 +1974,20 @@ async function runCartAbandonCampaign(bot) {
       keyboard = Markup.inlineKeyboard([[Markup.button.callback(`⚡ Klaim 15% OFF — Terakhir`, cbData)]]);
     }
 
+    if (user.opt_out) {
+      discVal = 0;
+      msg = `⚠️ <b>[REMINDER TAGIHAN]</b>\n\n` +
+            `Hai ${name}, tagihan Anda untuk pesanan ini akan segera kadaluarsa.\n` +
+            `Silakan selesaikan pembayaran Anda untuk mendapatkan akses.\n\n` +
+            `👇 <b>Lanjutkan Pembayaran:</b>`;
+      keyboard = Markup.inlineKeyboard([[Markup.button.callback('💳 Bayar Tagihan', cbData)]]);
+    }
+
     if (discVal > 0) {
       const targetProdId = productId && productId !== 'BUNDLE' ? String(productId) : null;
       await Discount.findOneAndUpdate(
         { target_user_id: Number(user._id), target_product_id: targetProdId, trigger_event: 'CART_ABANDON', type: 'PERCENTAGE', active: true },
-        { $set: { value: discVal, valid_until: new Date(Date.now() + 12 * 60 * 60 * 1000) } },
+        { $set: { value: discVal, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
         { upsert: true }
       );
     }
@@ -1700,7 +1995,21 @@ async function runCartAbandonCampaign(bot) {
     const hType = await getSetting('header_type', 'url');
     const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
     
-    // [FIX BUG]
+    // [FIX BUG #2] Check global rate limit (max 3 messages/day)
+    const canSend = await checkAndIncrementRateLimit(user._id);
+    if (!canSend) {
+      logger.info(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day, skipping CART_ABANDON campaign`);
+      stats.skipped++;
+      continue;
+    }
+    
+    // [FIX BUG #7] Check quiet hours (00:00-06:00) to prevent nighttime spam
+    if (isUserQuietHour(user)) {
+      logger.info(`[QUIET_HOUR] User ${user._id} in quiet hours (00:00-06:00), skipping CART_ABANDON, will queue for 06:01 AM`);
+      stats.skipped++;
+      continue;
+    }
+    
     const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'CART_ABANDON', userName: user.first_name || '?', reason: drip.product_id || 'cart_abandon' });
     if (result.ok) {
       // Update DripLog stage 0 → stage yang dikirim (bukan buat baru, cegah duplikat)
@@ -1739,6 +2048,7 @@ async function runFlashSaleCampaign(bot, allProducts) {
 
   const users = await User.find({
     is_blocked: { $ne: true },
+    opt_out: { $ne: true },
     $or: [
       { purchase_count: { $in: [0, null] } },
       { last_active_at: { $lt: new Date(now - 30 * 24 * 60 * 60 * 1000) } }
@@ -1779,11 +2089,11 @@ async function runFlashSaleCampaign(bot, allProducts) {
   const hType = await getSetting('header_type', 'url');
   const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
 
-  await CronProgress.create({ date: progressKey, campaign: 'COMPLETED', completed: true, created_at: new Date() });
-
   for (const user of users) {
     if (isUserQuietHour(user)) { stats.skipped++; continue; }
-    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'VIP_WINBACK', userName: user.first_name || '?', reason: 'winback' });
+    // [FIX H-1] Tambahkan isInCooldown check per-user di Flash Sale
+    if (isInCooldown(user, { currentCampaign: 'FLASH_SALE' })) { stats.skipped++; continue; }
+    const result = await sendSafe(bot, user._id, msg, { media: hFile, mediaType: hType, keyboard, campaign: 'FLASH_SALE', userName: user.first_name || '?', reason: 'flash_sale' });
     if (result.ok) {
       stats.sent++;
       await User.findByIdAndUpdate(user._id, { last_active_at: new Date() });
@@ -1792,6 +2102,10 @@ async function runFlashSaleCampaign(bot, allProducts) {
     }
     await delay(1500);
   }
+
+  // [FIX C-4] CronProgress dibuat SETELAH loop selesai
+  // Sebelumnya: dibuat sebelum loop → crash di tengah = semua sisa user tidak dapat Flash Sale
+  await CronProgress.create({ date: progressKey, campaign: 'COMPLETED', completed: true, created_at: new Date() }).catch(() => {});
   return stats;
 }
 
@@ -1921,23 +2235,20 @@ async function runMarketingCampaign(bot, todayStr) {
       // Sudah selesai hari ini — Drip tetap jalan tiap jam, campaign utama skip
       console.log('[CRON] Campaign utama sudah selesai hari ini. Menjalankan recurring hourly campaigns...');
       // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
-      await runCartAbandonCampaign,
-  runDripFollowUp(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam (Prioritas 1)
+      await runCartAbandonCampaign(bot);  // [UPGRADE 1] Cart abandon jalan tiap jam (Prioritas 1)
       await runPostPurchaseFollowUp(bot); // [W9] Post-purchase jalan tiap jam (Prioritas 2)
-      await runDripFollowUp(bot);         // Drip Follow up (Prioritas 3)
+      // [FIX BUG #9] DRIP moved to separate cron at :45 minutes (Prioritas 3)
       return { skipped: false, drip_only: true };
     }
   }
 
   if (progress.campaign === 'START') {
-    // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase > Drip
+    // URUTAN PRIORITAS TASK 2: Cart Abandon > Post-Purchase
+    // [FIX BUG #9] DRIP moved to separate cron at :45 minutes
     console.log('[MARKETING] Campaign 5: Cart Abandon Hyper-Recovery...');
-    cartAbandonStats = await runCartAbandonCampaign,
-  runDripFollowUp(bot); // Prioritas 1
+    cartAbandonStats = await runCartAbandonCampaign(bot); // Prioritas 1
     console.log('[MARKETING] Campaign 4: Post-Purchase Follow-Up...');
     await runPostPurchaseFollowUp(bot);                   // Prioritas 2
-    console.log('[MARKETING] Campaign 3: Drip Follow-Up (Stage 2 & 3)...');
-    dripStats = await runDripFollowUp(bot);               // Prioritas 3
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'DRIP_DONE' });
     progress.campaign = 'DRIP_DONE';
   }
@@ -1953,20 +2264,13 @@ async function runMarketingCampaign(bot, todayStr) {
     }
   }
 
-  // [FIX] VIP Win-back dan Cross-sell TIDAK perlu isPeakHour — seharusnya jalan tiap jam
-  // Sebelumnya: hanya jalan 7 jam/hari (peak hours) → success rate cuma 38%
-  // Sekarang: jalan tiap jam, tapi isHighConversionDay memberi boost prioritas
+  // [FIX BUG #9] VIP Win-back, Cross-sell, and DRIP extracted to separate cron schedules
+  // VIP Win-back: runs at :30 minutes (separate cron)
+  // Cross-sell: runs at :15 minutes (separate cron)
+  // DRIP: runs at :45 minutes (separate cron)
+  // Flash Sale and other campaigns continue in orchestrated flow
   if (progress.campaign === 'NON_BUYER_DONE') {
-    console.log('[MARKETING] Campaign VIP Win-Back...');
-    vipCount = await runVIPWinBackCampaign(bot);
-    await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'VIP_DONE' });
-    progress.campaign = 'VIP_DONE';
-  }
-
-  if (progress.campaign === 'VIP_DONE') {
     const allProducts = await Product.find({ active: 1 }).lean();
-    console.log('[MARKETING] Campaign 2: Cross-Sell (Smart Recommendation)...');
-    crossSellStats = await runCrossSellCampaign(bot, allProducts, globalTopProducts, similarityMap);
     console.log('[MARKETING] Campaign 6: Flash Sale (Minggu Malam)...');
     flashSaleStats = await runFlashSaleCampaign(bot, allProducts); // [UPGRADE 2]
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'COMPLETED', completed: true });
@@ -1976,18 +2280,18 @@ async function runMarketingCampaign(bot, todayStr) {
     cold: nonBuyerStats.cold,
     abandon: nonBuyerStats.abandon,
     inactive: nonBuyerStats.inactive,
-    crossSell: crossSellStats.crossSell,
-    complete: crossSellStats.complete,
-    stage2: dripStats.stage2,
-    stage3: dripStats.stage3,
-    stage4: dripStats.stage4,
-    vipWinBack: vipCount,
+    crossSell: 0,  // [FIX BUG #9] Moved to separate cron at :15 minutes
+    complete: 0,   // [FIX BUG #9] Moved to separate cron at :15 minutes
+    stage2: 0,     // [FIX BUG #9] DRIP moved to separate cron at :45 minutes
+    stage3: 0,     // [FIX BUG #9] DRIP moved to separate cron at :45 minutes
+    stage4: 0,     // [FIX BUG #9] DRIP moved to separate cron at :45 minutes
+    vipWinBack: 0, // [FIX BUG #9] Moved to separate cron at :30 minutes
     cartAbandon1h: cartAbandonStats.sent1h,
     cartAbandon3h: cartAbandonStats.sent3h,
     cartAbandon12h: cartAbandonStats.sent12h,
     flashSaleSent: flashSaleStats.sent,
-    skipped: nonBuyerStats.skipped + crossSellStats.skipped + dripStats.skipped + cartAbandonStats.skipped + flashSaleStats.skipped,
-    failed: nonBuyerStats.failed + crossSellStats.failed + dripStats.failed
+    skipped: nonBuyerStats.skipped + cartAbandonStats.skipped + flashSaleStats.skipped,
+    failed: nonBuyerStats.failed
   };
 
   // [REMOVED] User.deleteMany dihapus — berbahaya, menghapus user permanen dari DB
@@ -2086,7 +2390,28 @@ async function runVIPWinBackCampaign(bot) {
   }).lean();
 
   for (const user of vips) {
-    if (isUserQuietHour(user) || isInCooldown(user, { currentCampaign: 'FLASH_SALE' })) continue;
+    // [FIX BUG #4] Use correct campaign name for VIP_WINBACK cooldown check
+    if (isUserQuietHour(user) || isInCooldown(user, { currentCampaign: 'VIP_WINBACK' })) continue;
+    
+    // [FIX BUG #3] Acquire distributed lock to prevent race conditions
+    const gotLock = await acquireCampaignLock(user._id, 'VIP_WINBACK');
+    if (!gotLock) {
+      logger.info(`[LOCK] User ${user._id} locked by another campaign, skipping VIP_WINBACK campaign`);
+      continue;
+    }
+    
+    // [FIX BUG #2] Check global rate limit (max 3 messages/day)
+    const canSend = await checkAndIncrementRateLimit(user._id);
+    if (!canSend) {
+      logger.info(`[RATE_LIMIT] User ${user._id} exceeded 3 messages/day, skipping VIP_WINBACK campaign`);
+      continue;
+    }
+    
+    // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+    if (await isUserInCheckout(user._id)) {
+      logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping VIP_WINBACK to avoid payment flow interruption`);
+      continue;
+    }
     
     // [FIX] Ganti Markdown (*bold*) ke HTML (<b>bold</b>) — sendSafe pakai parse_mode HTML
     const msg =
@@ -2158,15 +2483,123 @@ function startCron(bot) {
 
     const now = new Date();
     const jakartaDate = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
-    const todayHourStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}-${String(jakartaDate.getHours()).padStart(2,'0')}`;
+    // [FIX C-1] Gunakan date-only key (bukan jam) agar CronProgress survive seharian
+    // Sebelumnya: "2026-09-12-09" → tiap jam buat record baru → guard tidak pernah aktif
+    // Sekarang:   "2026-09-12" → 1 record per hari, campaign utama tidak diulang
+    const todayDateStr = `${jakartaDate.getFullYear()}-${String(jakartaDate.getMonth()+1).padStart(2,'0')}-${String(jakartaDate.getDate()).padStart(2,'0')}`;
     console.log(`[CRON] ⏰ Menjalankan Marketing Automations (${now.toISOString()})...`);
     try {
-      const stats = await runMarketingCampaign(bot, todayHourStr);
+      const stats = await runMarketingCampaign(bot, todayDateStr);
       console.log('[CRON] ✅ Marketing selesai. Stats:', JSON.stringify(stats));
     } catch (err) {
       console.error('[CRON] ❌ Gagal menjalankan marketing:', err.message);
     } finally {
       isMarketingRunning = false;
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 1.1: CROSS_SELL Campaign — Jam 10-20 WIB setiap :15 menit ─────────
+  // [FIX BUG #9] Stagger campaign schedules to reduce race conditions
+  // CROSS_SELL runs at :15 minutes (15-minute gap from NON_BUYER at :00)
+  const crossSellTask = cron.schedule('15 10-20 * * *', async () => {
+    if (!marketingEnabled) return;
+    console.log(`[CRON] ⏰ Menjalankan CROSS_SELL Campaign...`);
+    try {
+      // Pre-compute necessary context for CROSS_SELL
+      const allProducts = await Product.find({ active: 1 }).lean();
+      const now = Date.now();
+      
+      // Use cached data if available and fresh (< 1 hour old)
+      if (!cachedGlobalTopProducts || (now - lastGlobalTopProductsUpdate > 3600000)) {
+        console.log('[CROSS_SELL] Computing fresh product recommendations...');
+        
+        // 1. Global Top Products
+        const globalTop = await OrderItem.aggregate([
+          { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
+          { $unwind: '$order' },
+          { $match: { 'order.status': 'SUCCESS' } },
+          { $group: { _id: '$product_id', qty: { $sum: 1 } } },
+          { $sort: { qty: -1 } }
+        ]);
+        const topProducts = [];
+        for (const row of globalTop) {
+          const prod = allProducts.find(p => String(p._id) === String(row._id));
+          if (prod) topProducts.push(prod);
+        }
+        for (const p of allProducts) {
+          if (!topProducts.find(t => String(t._id) === String(p._id))) topProducts.push(p);
+        }
+        cachedGlobalTopProducts = topProducts;
+
+        // 2. Similarity Map (Collaborative Filtering)
+        const userPurchases = await OrderItem.aggregate([
+          { $lookup: { from: 'orders', localField: 'order_id', foreignField: '_id', as: 'order' } },
+          { $unwind: '$order' },
+          { $match: { 'order.status': 'SUCCESS' } },
+          { $group: { _id: '$order.user_id', products: { $addToSet: '$product_id' } } }
+        ]);
+
+        const coMatrix = {};
+        for (const user of userPurchases) {
+          const prods = user.products;
+          for (let i = 0; i < prods.length; i++) {
+            for (let j = 0; j < prods.length; j++) {
+              if (i !== j) {
+                const pA = String(prods[i]);
+                const pB = String(prods[j]);
+                if (!coMatrix[pA]) coMatrix[pA] = {};
+                coMatrix[pA][pB] = (coMatrix[pA][pB] || 0) + 1;
+              }
+            }
+          }
+        }
+
+        const simMap = {};
+        for (const pA in coMatrix) {
+          const sorted = Object.entries(coMatrix[pA]).sort((a,b) => b[1] - a[1]).slice(0,3);
+          simMap[pA] = sorted.map(s => s[0]);
+        }
+        
+        for (const p of allProducts) {
+          if (!simMap[String(p._id)]) simMap[String(p._id)] = [];
+        }
+        
+        cachedSimilarityMap = simMap;
+        lastGlobalTopProductsUpdate = now;
+      }
+      
+      const crossSellStats = await runCrossSellCampaign(bot, allProducts, cachedGlobalTopProducts, cachedSimilarityMap);
+      console.log('[CRON] ✅ CROSS_SELL selesai. Stats:', JSON.stringify(crossSellStats));
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal menjalankan CROSS_SELL:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 1.2: VIP_WINBACK Campaign — Jam 10-20 WIB setiap :30 menit ─────────
+  // [FIX BUG #9] Stagger campaign schedules to reduce race conditions
+  // VIP_WINBACK runs at :30 minutes (30-minute gap from NON_BUYER at :00, 15-minute gap from CROSS_SELL)
+  const vipWinbackTask = cron.schedule('30 10-20 * * *', async () => {
+    if (!marketingEnabled) return;
+    console.log(`[CRON] ⏰ Menjalankan VIP_WINBACK Campaign...`);
+    try {
+      const vipCount = await runVIPWinBackCampaign(bot);
+      console.log('[CRON] ✅ VIP_WINBACK selesai. Count:', vipCount);
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal menjalankan VIP_WINBACK:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
+  // ── TASK 1.3: DRIP Campaign — Jam 10-20 WIB setiap :45 menit ─────────
+  // [FIX BUG #9] Stagger campaign schedules to reduce race conditions
+  // DRIP runs at :45 minutes (45-minute gap from NON_BUYER at :00, 30-minute gap from CROSS_SELL, 15-minute gap from VIP_WINBACK)
+  const dripTask = cron.schedule('45 10-20 * * *', async () => {
+    if (!marketingEnabled) return;
+    console.log(`[CRON] ⏰ Menjalankan DRIP Follow-Up Campaign (Stage 2, 3, 4)...`);
+    try {
+      const dripStats = await runDripFollowUp(bot);
+      console.log('[CRON] ✅ DRIP selesai. Stats:', JSON.stringify(dripStats));
+    } catch (err) {
+      console.error('[CRON] ❌ Gagal menjalankan DRIP:', err.message);
     }
   }, { timezone: 'Asia/Jakarta' });
 
@@ -2198,6 +2631,20 @@ function startCron(bot) {
       }
     } catch (err) {
       console.error('[CLEANUP] Gagal menonaktifkan diskon kedaluwarsa:', err.message);
+    }
+    
+    // [FIX BUG #5] Delete expired inactive discounts to prevent database bloat
+    // This runs after deactivation to ensure expired discounts are marked inactive first
+    try {
+      const deleteResult = await Discount.deleteMany({
+        valid_until: { $lt: new Date() },
+        active: false
+      });
+      if (deleteResult.deletedCount > 0) {
+        console.log(`[CLEANUP] Dihapus ${deleteResult.deletedCount} diskon kedaluwarsa yang tidak aktif.`);
+      }
+    } catch (err) {
+      console.error('[CLEANUP] Gagal menghapus diskon kedaluwarsa:', err.message);
     }
     
     console.log('[CRON] ✅ Cleanup selesai.');
@@ -2294,7 +2741,7 @@ function startCron(bot) {
     }
   }, { timezone: 'Asia/Jakarta' });
 
-  cronTasks = [marketingTask, backupTask, cleanupTask, metricsTask, discountReminderTask, stuckOrderTask];
+  cronTasks = [marketingTask, crossSellTask, vipWinbackTask, dripTask, backupTask, cleanupTask, metricsTask, discountReminderTask, stuckOrderTask];
   
   // [FIX BUG#8] Startup run: hanya jalankan drip + cart-abandon saat restart
   // BUKAN runMarketingCampaign penuh — karena itu bisa kirim campaign utama berkali-kali
@@ -2317,10 +2764,9 @@ function startCron(bot) {
   } else {
     global._lastStartupDrip = now;
     Promise.all([
-      runDripFollowUp(bot),
-      runCartAbandonCampaign,
-  runDripFollowUp(bot),
-      runPostPurchaseFollowUp(bot)
+      runCartAbandonCampaign(bot),
+      runPostPurchaseFollowUp(bot),
+      runDripFollowUp(bot)
     ])
       .then(() => console.log('[CRON] ✅ Startup drip selesai.'))
       .catch(err => console.error('[CRON] ❌ Startup drip gagal:', err.message));
@@ -2347,7 +2793,28 @@ async function triggerRealtimeMarketing(bot, userId) {
 
     // 1. Ambil data user
     const user = await User.findById(userId).lean();
-    if (!user || user.is_blocked) return;
+    if (!user || user.is_blocked || user.opt_out) return;
+
+    // [FIX BUG #10] Add 60-minute throttle check to prevent spam during active conversations
+    // If a broadcast was sent in the last 60 minutes, skip this realtime trigger
+    if (user.last_broadcast_at) {
+      const minutesSinceLastBroadcast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60);
+      if (minutesSinceLastBroadcast < 60) {
+        logger.info(`[RT-MARKETING] Skipping user ${userId}: only ${Math.round(minutesSinceLastBroadcast)} minutes since last broadcast (need 60min)`);
+        return; // Skip - too soon
+      }
+    }
+
+    // [FIX BUG #1, #16] Capture historical last_active_at BEFORE any updates
+    // This timestamp was set during the user's PREVIOUS activity, not the current message
+    // Using it ensures correct segment classification (HOT/WARM/COLD/GHOST)
+    const historicalLastActive = user.last_active_at;
+
+    // [FIX BUG #11] Check if user is in active checkout (has PENDING order)
+    if (await isUserInCheckout(user._id)) {
+      logger.info(`[CHECKOUT] User ${user._id} has pending order, skipping REALTIME to avoid payment flow interruption`);
+      return; // Exit early for realtime trigger
+    }
 
     // 2. [FIX] Hapus pengecekan Order disini agar buyer tetap dapat marketing untuk
     // produk-produk SISA yang belum dibeli. (Difilter di buildAllProductsKeyboard)
@@ -2356,7 +2823,8 @@ async function triggerRealtimeMarketing(bot, userId) {
     if (isInCooldown(user)) return;
 
     // 4. Klasifikasi segment berdasarkan last_active_at
-    const segment = await classifyNonBuyer(user);
+    // [FIX BUG #1] Use historical timestamp for classification
+    const segment = await classifyNonBuyer({ ...user, last_active_at: historicalLastActive });
 
     // 5. Tentukan diskon berdasarkan segment
     let discountVal = 0;
@@ -2382,7 +2850,7 @@ async function triggerRealtimeMarketing(bot, userId) {
       if (!existingDisc) {
         await Discount.findOneAndUpdate(
           { target_user_id: Number(userId), target_product_id: null, trigger_event: 'REALTIME', type: 'PERCENTAGE', active: true },
-          { $set: { value: discountVal, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
+          { $set: { value: discountVal, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
           { upsert: true }
         );
       }
@@ -2398,23 +2866,30 @@ async function triggerRealtimeMarketing(bot, userId) {
       msg = `👋 <b>${name}!</b>\n\n` +
             `Ada <b>${totalBuyers}+ member</b> yang sudah di dalam.\n\n` +
             `Hari ini kamu dapat <b>diskon ${discountVal}%</b> — tinggal klik tombol di bawah.\n\n` +
-            `<blockquote>Diskon berlaku 48 jam dari sekarang.</blockquote>`;
+            `<blockquote>Diskon berlaku 24 jam dari sekarang.</blockquote>`;
     } else if (segment === 'WARM') {
       msg = `🔔 <b>${name}, ada penawaran buat kamu!</b>\n\n` +
             `Kamu belum sempat gabung — kami kasih <b>diskon ${discountVal}%</b> hari ini.\n\n` +
             `Sudah <b>${totalBuyers}+ member</b> yang aktif.\n\n` +
-            `<blockquote>Diskon berlaku 48 jam — tidak bisa diperpanjang.</blockquote>`;
+            `<blockquote>Diskon berlaku 24 jam — tidak bisa diperpanjang.</blockquote>`;
     } else if (segment === 'COLD') {
       msg = `🎁 <b>Selamat datang kembali, ${name}!</b>\n\n` +
             `Sudah lama tidak mampir — ada <b>diskon ${discountVal}%</b> khusus buat kamu.\n\n` +
-            `<blockquote>Penawaran ini hanya berlaku 48 jam dari sekarang.</blockquote>`;
+            `<blockquote>Penawaran ini hanya berlaku 24 jam dari sekarang.</blockquote>`;
     } else { // GHOST
       msg = `🎁 <b>${name}, masih ingat kami?</b>\n\n` +
             `Kami siapkan <b>diskon ${discountVal}%</b> — penawaran terbesar yang pernah kami kasih.\n\n` +
-            `<blockquote>Ini penawaran terakhir — berlaku 48 jam saja.</blockquote>`;
+            `<blockquote>Ini penawaran terakhir — berlaku 24 jam saja.</blockquote>`;
     }
 
-    // 9. Kirim via sendSafe (sudah handle blocked, cooldown, logging)
+    // 9. [FIX BUG #2] Check global rate limit (max 3 messages/day)
+    const canSend = await checkAndIncrementRateLimit(userId);
+    if (!canSend) {
+      logger.info(`[RATE_LIMIT] User ${userId} exceeded 3 messages/day, skipping REALTIME`);
+      return;
+    }
+
+    // 10. Kirim via sendSafe (sudah handle blocked, cooldown, logging)
     const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
     const hType = await getSetting('header_type', 'url');
     const firstProd = unboughtProducts[0];
@@ -2451,6 +2926,11 @@ module.exports = {
   triggerRealtimeMarketing,   // ← export baru
   getSmartRecommendation,
   runCartAbandonCampaign,
-  runDripFollowUp
+  runDripFollowUp,
+  checkAndIncrementRateLimit,  // ← export for unit tests
+  acquireCampaignLock,         // ← export for unit tests
+  isUserInCheckout,            // ← export for unit tests
+  classifyNonBuyer,            // ← export for unit tests (Task 6.1.4)
+  isInCooldown                 // ← export for unit tests (Task 6.3.1)
 };
 

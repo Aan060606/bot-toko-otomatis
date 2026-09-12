@@ -35,7 +35,18 @@ const UserSchema = new mongoose.Schema({
   source_ref: String,
   last_broadcast_at: { type: Date, default: null }, // Kapan terakhir dapat pesan marketing otomatis (anti-spam 48 jam)
   last_promo_campaign: { type: String, default: null }, // Campaign apa yang terakhir dikirim
-  last_menu_msg_id: { type: Number, default: null } // Menyimpan ID pesan menu utama terakhir
+  last_menu_msg_id: { type: Number, default: null }, // Menyimpan ID pesan menu utama terakhir
+  opt_out: { type: Boolean, default: false },
+  opt_out_at: Date,
+  // [FIX BUG #2] Global rate limit tracking: max 3 marketing messages per user per day
+  marketing_messages_today: { type: Number, default: 0 },
+  marketing_messages_reset_at: { type: Date, default: () => {
+    // Set to next midnight Asia/Jakarta
+    const now = new Date();
+    const jakarta = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+    jakarta.setHours(24, 0, 0, 0);
+    return jakarta;
+  }}
 });
 
 const ProductSchema = new mongoose.Schema({
@@ -131,6 +142,13 @@ const DiscountSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now }
 });
 
+// [FIX BUG #5] TTL index: auto-delete expired inactive discounts after 7 days grace period
+// Only discounts with active: false will be auto-deleted 7 days after valid_until
+DiscountSchema.index({ valid_until: 1 }, { 
+  expireAfterSeconds: 7 * 24 * 60 * 60,
+  partialFilterExpression: { active: false }
+});
+
 const DripLogSchema = new mongoose.Schema({
   user_id: { type: Number, ref: 'User' },
   product_id: { type: String, ref: 'Product' }, // Produk yang sedang ditawarkan di drip ini
@@ -143,7 +161,9 @@ const DripLogSchema = new mongoose.Schema({
   revenue_generated: { type: Number, default: 0 }, // Pendapatan yang dihasilkan dari konversi ini
   created_at: { type: Date, default: Date.now }
 });
-// TTL 180 hari absolut untuk menghapus data usang yang macet atau sudah converted
+// [FIX M-1] TTL 180 hari untuk hapus drip log usang
+// CATATAN: MongoDB hanya boleh 1 TTL index per field.
+// Duplikat TTL index di-remove untuk mencegah conflict (E11000 / warning saat startup).
 DripLogSchema.index({ created_at: 1 }, { expireAfterSeconds: 180 * 24 * 60 * 60 });
 // Index untuk drip update pada fulfillOrder (updateMany by user_id+converted)
 DripLogSchema.index({ user_id: 1, converted: 1 });
@@ -175,6 +195,17 @@ const BroadcastLogSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now }
 });
 
+// [FIX BUG #3] Distributed locking for race condition prevention
+const CampaignLockSchema = new mongoose.Schema({
+  lock_key: { type: String, unique: true }, // Format: "campaign_lock_{userId}_{YYYY-MM-DD}"
+  campaign_type: String,
+  acquired_at: { type: Date, default: Date.now },
+  expires_at: { type: Date, required: true }
+});
+
+// TTL index: auto-delete locks after expires_at timestamp (1 hour from acquisition)
+CampaignLockSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
+
 module.exports = {
   User: mongoose.model('User', UserSchema),
   Product: mongoose.model('Product', ProductSchema),
@@ -187,6 +218,7 @@ module.exports = {
   Discount: mongoose.model('Discount', DiscountSchema),
   DripLog: mongoose.model('DripLog', DripLogSchema),
   BroadcastLog: mongoose.model('BroadcastLog', BroadcastLogSchema),
+  CampaignLock: mongoose.model('CampaignLock', CampaignLockSchema),
   ABTestResult: mongoose.model('ABTestResult', ABTestResultSchema),
   CronProgress: mongoose.model('CronProgress', CronProgressSchema)
 };
