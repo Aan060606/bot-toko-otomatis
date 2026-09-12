@@ -3052,8 +3052,10 @@ if (process.env.NODE_ENV !== "test") {
       logger.warn('[BOT] Gagal hapus webhook:', e.message);
     }
 
-    // [FIX 409] Tunggu 10s agar Telegram benar-benar melepas sesi polling lama
-    await new Promise(r => setTimeout(r, 10000));
+    // [FIX 409] Tunggu 35s — Telegram long-poll pakai timeout=30s.
+    // Instance lama punya getUpdates request yang hidup sampai 30 detik setelah disconnect.
+    // Kita harus tunggu lebih dari 30s agar slot polling dilepas Telegram.
+    await new Promise(r => setTimeout(r, 35000));
 
     // Panggil deleteWebhook sekali lagi tepat sebelum launch
     try {
