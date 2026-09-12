@@ -3052,8 +3052,15 @@ if (process.env.NODE_ENV !== "test") {
       logger.warn('[BOT] Gagal hapus webhook:', e.message);
     }
 
-    // Tunggu 3 detik agar instance lama sempat terminasi
-    await new Promise(r => setTimeout(r, 3000));
+    // [FIX 409] Tunggu lebih lama (10s) agar Telegram benar-benar melepas sesi polling lama
+    // Polling Telegram bersifat long-poll (timeout 30s), jika instance lama baru saja mati
+    // Telegram butuh beberapa detik untuk melepas "lock" polling sebelum bisa diambil alih.
+    await new Promise(r => setTimeout(r, 10000));
+
+    // Panggil deleteWebhook sekali lagi tepat sebelum launch untuk memastikan slot polling kosong
+    try {
+      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    } catch (_) {}
 
     scheduler.startCron(bot);
     bot.launch({ dropPendingUpdates: true })
