@@ -3052,28 +3052,26 @@ if (process.env.NODE_ENV !== "test") {
       logger.warn('[BOT] Gagal hapus webhook:', e.message);
     }
 
-    // [FIX 409] Tunggu lebih lama (10s) agar Telegram benar-benar melepas sesi polling lama
-    // Polling Telegram bersifat long-poll (timeout 30s), jika instance lama baru saja mati
-    // Telegram butuh beberapa detik untuk melepas "lock" polling sebelum bisa diambil alih.
+    // [FIX 409] Tunggu 10s agar Telegram benar-benar melepas sesi polling lama
     await new Promise(r => setTimeout(r, 10000));
 
-    // Panggil deleteWebhook sekali lagi tepat sebelum launch untuk memastikan slot polling kosong
+    // Panggil deleteWebhook sekali lagi tepat sebelum launch
     try {
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     } catch (_) {}
 
-    scheduler.startCron(bot);
+    // [FIX 409] startCron dipindah ke DALAM .then() — jangan jalankan startup drip
+    // sebelum bot.launch() sukses. Drip async bisa "racing" dengan polling request
+    // sehingga Telegram menganggap 2 instance aktif → 409.
     bot.launch({ dropPendingUpdates: true })
       .then(() => {
         logger.success("Bot Toko Otomatis berjalan!");
+        scheduler.startCron(bot); // ← Cron dimulai SETELAH polling aktif
         resumePendingOrders();
       })
       .catch(async (err) => {
         if (err.message && err.message.includes('409')) {
           logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 60 detik lalu restart...");
-          // [FIX] Tingkatkan delay 15s → 60s agar loop restart cepat (409 storm) tidak terjadi
-          // Loop sebelumnya: restart tiap 15 detik → Telegram terus anggap 2 instance → 409 terus
-          // Solusi: tunggu 60 detik → instance lama pasti sudah hilang, polling bisa diambil alih
           await new Promise(r => setTimeout(r, 60000));
           process.exit(1);
         } else {
