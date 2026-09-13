@@ -759,10 +759,13 @@ async function runNonBuyerCampaign(bot) {
 
     const prodList = unboughtProducts;
     
-    // [BUGFIX BUG-06] Hitung rotationIndex SEBELUM blok if/else agar tersedia di blok HOT
+    // [FIX ROTASI] Rotasi produk berbasis jumlah pesan yang sudah diterima user
+    // Sebelumnya: (userId + hari) % N → user yang sama selalu dapat produk SAMA setiap hari
+    // Sekarang: (userId + broadcastCount) % N → produk berganti setiap kali user dapat pesan
     const userIdNum = typeof user._id === 'object' ? parseInt(String(user._id).slice(-6), 16) : Number(user._id);
-    const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
-    const rotationIndex = (userIdNum + dayOfYear) % (prodList.length || 1);
+    const broadcastCount = user.daily_message_count || 0; // berapa kali sudah dapat pesan
+    const rotationIndex = (userIdNum + broadcastCount) % (prodList.length || 1);
+    logger.info(`[ROTASI] userId=${user._id} broadcastCount=${broadcastCount} rotationIndex=${rotationIndex}/${prodList.length} → produk: ${prodList[rotationIndex]?.name || '-'}`);
     
     const customKey = segment === 'HOT' ? 'hot_lead'
                     : segment === 'WARM' ? 'warm_lead'
@@ -2914,9 +2917,16 @@ async function triggerRealtimeMarketing(bot, userId) {
     // 10. Kirim via sendSafe (sudah handle blocked, cooldown, logging)
     const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
     const hType = await getSetting('header_type', 'url');
-    const firstProd = unboughtProducts[0];
+    
+    // [FIX ROTASI RT] Pilih produk hero berdasarkan broadcastCount — berganti tiap pesan
+    // Sebelumnya: unboughtProducts[0] → selalu produk pertama (sama terus)
+    const rtUserIdNum = typeof userId === 'object' ? parseInt(String(userId).slice(-6), 16) : Number(userId);
+    const rtBroadcastCount = user.daily_message_count || 0;
+    const rtRotationIndex = (rtUserIdNum + rtBroadcastCount) % (unboughtProducts.length || 1);
+    const firstProd = unboughtProducts[rtRotationIndex] || unboughtProducts[0];
     const media = firstProd?.promo_image_id || hFile;
     const mediaType = firstProd?.promo_image_id ? (firstProd.promo_media_type || 'photo') : hType;
+    logger.info(`[RT-ROTASI] userId=${userId} rotasi=${rtRotationIndex}/${unboughtProducts.length} → hero: ${firstProd?.name || '-'}`);
 
     const result = await sendSafe(bot, userId, msg, {
       media,
