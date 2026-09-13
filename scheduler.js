@@ -797,22 +797,30 @@ async function runNonBuyerCampaign(bot) {
             `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
       } else if (segment === 'WARM') {
         const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
+        const recentBuyers = await Order.countDocuments({
+          status: 'SUCCESS',
+          created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+        });
         // [FIX BUG #13] Apply rotation to WARM segment for fair product exposure
         const p = prodList[rotationIndex] || prodList[0];
         const isJAV = p && p.name.toLowerCase().includes('jav');
-        // [FIX] WARM sekarang dapat diskon 10% — sebutkan di copy!
+        // [FIX NON_BUYER_WARM] Upgrade copy — data log: 6.244 pesan, 0 konversi.
+        // Sebelumnya: copy terlalu lembut ("Ada yang baru"). Sekarang: urgency + scarcity nyata.
+        const socialLine24h = recentBuyers > 0
+          ? `${recentBuyers} orang bergabung dalam 24 jam terakhir.`
+          : `${totalBuyers}+ member aktif sudah di dalam.`;
         msg = isJAV
-          ? `🌟 <b>Subtitle baru masuk + Diskon ${discountVal}% buat kamu!</b>\n\n` +
-            `Tim J-SUB baru selesai batch subtitle minggu ini.\n\n` +
-            `<blockquote>Dibuat sendiri — bukan auto-sub, bukan repost.</blockquote>\n\n` +
-            `Sudah <b>${totalBuyers}+ member</b> yang bisa nikmatin. Kamu bisa masuk dengan harga lebih murah.\n\n` +
-            `🎁 <b>Diskon ${discountVal}% — Klik tombol di bawah untuk pakai</b>\n\n` +
-            `👇 <b>Lihat Koleksi + Hemat ${discountVal}%</b>`
-          : `🔔 <b>Ada yang baru + Diskon ${discountVal}% khusus kamu!</b>\n\n` +
-            `Update baru sudah masuk — dan <b>${totalBuyers}+ member</b> sudah bisa akses.\n\n` +
-            `Kamu dapat diskon <b>${discountVal}%</b> jika gabung hari ini.\n\n` +
-            `<blockquote>Diskon hangus 48 jam.</blockquote>\n\n` +
-            `👇 <b>Gabung + Hemat ${discountVal}%</b>`;
+          ? `⚡ <b>${totalBuyers}+ member sudah akses — kamu kapan?</b>\n\n` +
+            `Batch subtitle baru baru selesai. Tanpa auto-sub, tanpa repost — dikerjain manual.\n\n` +
+            `<blockquote>${socialLine24h} Slot tidak unlimited.</blockquote>\n\n` +
+            `Hari ini kamu bisa masuk dengan <b>harga lebih hemat ${discountVal}%.</b>\n` +
+            `Diskon ini hangus otomatis dalam 48 jam — tidak bisa diperpanjang.\n\n` +
+            `👇 <b>Masuk Sekarang — Hemat ${discountVal}%</b>`
+          : `⚡ <b>${socialLine24h}</b>\n\n` +
+            `Koleksi terus bertambah — dan harga akan ikut naik.\n\n` +
+            `Sekarang kamu masih bisa masuk dengan <b>diskon ${discountVal}%.</b>\n\n` +
+            `<blockquote>Diskon hangus 48 jam. Tidak ada perpanjangan.</blockquote>\n\n` +
+            `👇 <b>Ambil Sekarang — Sebelum Harga Normal</b>`;
       } else {
         // COLD/GHOST = sudah lama tidak aktif, butuh re-engagement + diskon besar
         // [FIX BUG #13] Apply rotation to COLD/GHOST segments for fair product exposure
@@ -1865,10 +1873,15 @@ async function runCartAbandonCampaign(bot) {
   // [FIX ROOT CAUSE] Sebelumnya menggunakan UserEvent CHECKOUT yang tidak pernah fired.
   // Sekarang langsung pakai DripLog CART_ABANDON stage 0 sebagai trigger —
   // DripLog ini di-create otomatis saat order expire di handleOrderExpired().
+  // [FIX CART-SCHEDULE] Juga ambil DripLog yang sudah scheduled_at <= now (dini hari yang di-queue)
   const pendingCA = await DripLog.find({
     campaign_type: 'CART_ABANDON',
     stage: 0,           // Stage 0 = baru abandon, belum dapat pesan apapun
-    converted: false
+    converted: false,
+    $or: [
+      { scheduled_at: { $exists: false } },      // belum punya schedule = kirim sekarang
+      { scheduled_at: { $lte: now } }             // sudah waktunya (queue dari malam)
+    ]
   }).lean();
 
   for (const drip of pendingCA) {
@@ -1997,9 +2010,16 @@ async function runCartAbandonCampaign(bot) {
       continue;
     }
     
-    // [FIX BUG #7] Check quiet hours (00:00-06:00) to prevent nighttime spam
+    // [FIX CART-QUIET] Jika quiet hour (00-07), jangan skip total — queue untuk jam 07:00
+    // Data log: 51 order expired, hanya 3 dapat follow-up. Banyak expire dini hari tapi di-skip.
+    // Solusi: jika malam, tandai DripLog dengan scheduled_at=07:00 hari ini agar cron 07:00 pick up.
     if (isUserQuietHour(user)) {
-      logger.info(`[QUIET_HOUR] User ${user._id} in quiet hours (00:00-06:00), skipping CART_ABANDON, will queue for 06:01 AM`);
+      const jakartaNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+      const scheduleAt = new Date(jakartaNow);
+      scheduleAt.setHours(7, 1, 0, 0); // 07:01 WIB
+      if (scheduleAt <= jakartaNow) scheduleAt.setDate(scheduleAt.getDate() + 1); // besok jika sudah lewat
+      await DripLog.findByIdAndUpdate(drip._id, { scheduled_at: scheduleAt });
+      logger.info(`[CART_ABANDON] Quiet hour — dijadwalkan jam 07:01 untuk user ${user._id}`);
       stats.skipped++;
       continue;
     }
@@ -2788,6 +2808,14 @@ async function triggerRealtimeMarketing(bot, userId) {
     // 1. Ambil data user
     const user = await User.findById(userId).lean();
     if (!user || user.is_blocked || user.opt_out) return;
+
+    // [FIX RT-QUIET] Block RT Marketing jam 00:00-06:59 WIB
+    // Data log: 1.772 pesan dikirim jam 00-06 → 0 konversi. Hanya ganggu user.
+    // isUserQuietHour() sudah ada tapi tidak dipanggil di RT Marketing path.
+    if (isUserQuietHour(user)) {
+      logger.info(`[RT-MARKETING] Quiet hour (00-07 WIB), skipping user ${userId}`);
+      return;
+    }
 
     // [FIX BUG #10] Add 60-minute throttle check to prevent spam during active conversations
     // If a broadcast was sent in the last 60 minutes, skip this realtime trigger
