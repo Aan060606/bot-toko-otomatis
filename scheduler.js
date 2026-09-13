@@ -2820,13 +2820,18 @@ async function triggerRealtimeMarketing(bot, userId) {
       return;
     }
 
-    // [FIX BUG #10] Add 60-minute throttle check to prevent spam during active conversations
-    // If a broadcast was sent in the last 60 minutes, skip this realtime trigger
-    if (user.last_broadcast_at) {
-      const minutesSinceLastBroadcast = (new Date() - new Date(user.last_broadcast_at)) / (1000 * 60);
-      if (minutesSinceLastBroadcast < 60) {
-        logger.info(`[RT-MARKETING] Skipping user ${userId}: only ${Math.round(minutesSinceLastBroadcast)} minutes since last broadcast (need 60min)`);
-        return; // Skip - too soon
+    // [FIX RT-COOLDOWN] RT Marketing pakai cooldown TERPISAH dari campaign besar
+    // Masalah: last_broadcast_at dipakai oleh campaign jam 10 DAN RT → user yang dapat
+    // campaign pagi langsung diblock RT 48 jam → tidak dapat marketing saat online malam.
+    // Data: 42 dari 49 user aktif diblok cooldown padahal mereka online dan siap convert.
+    // Fix: RT pakai last_rt_sent_at dengan cooldown 6 jam (bukan 48 jam).
+    const RT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 jam
+    if (user.last_rt_sent_at) {
+      const msSinceLastRT = Date.now() - new Date(user.last_rt_sent_at).getTime();
+      if (msSinceLastRT < RT_COOLDOWN_MS) {
+        const minutesLeft = Math.round((RT_COOLDOWN_MS - msSinceLastRT) / 60000);
+        logger.info(`[RT-MARKETING] Cooldown RT aktif untuk ${userId}: ${minutesLeft} menit lagi`);
+        return;
       }
     }
 
@@ -2844,8 +2849,9 @@ async function triggerRealtimeMarketing(bot, userId) {
     // 2. [FIX] Hapus pengecekan Order disini agar buyer tetap dapat marketing untuk
     // produk-produk SISA yang belum dibeli. (Difilter di buildAllProductsKeyboard)
 
-    // 3. Cek cooldown global 48 jam menggunakan isInCooldown() (tanpa currentCampaign agar TIDAK mem-bypass lock)
-    if (isInCooldown(user)) return;
+    // 3. TIDAK pakai isInCooldown() global 48 jam — RT punya cooldown sendiri di atas (6 jam)
+    // isInCooldown() global hanya untuk campaign besar (jam 10, drip, dll)
+    // if (isInCooldown(user)) return; // ← DIHAPUS, diganti RT cooldown 6 jam di atas
 
     // 4. Klasifikasi segment berdasarkan last_active_at
     // [FIX BUG #1] Use historical timestamp for classification
@@ -2939,6 +2945,10 @@ async function triggerRealtimeMarketing(bot, userId) {
 
     if (result.ok) {
       logger.info(`[RT-MARKETING] Terkirim ke ${userId} (${name}) segment=${segment} diskon=${discountVal}%`);
+      // [FIX RT-COOLDOWN] Simpan timestamp RT terakhir — terpisah dari last_broadcast_at (campaign besar)
+      // last_broadcast_at tetap di-update oleh sendSafe() untuk rate limit harian
+      // last_rt_sent_at dipakai khusus untuk cooldown 6 jam RT Marketing
+      await User.findByIdAndUpdate(userId, { $set: { last_rt_sent_at: new Date() } }).catch(() => {});
     }
 
   } catch (err) {
