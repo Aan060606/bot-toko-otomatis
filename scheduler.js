@@ -34,6 +34,69 @@ let marketingEnabled = true;
 let cronTasks = []; // Array of node-cron tasks (restart-proof)
 let lastCronDate = null; // Still used for manual/startup run guard
 
+// ─── SESSION TRACKER (In-Memory) ─────────────────────────────────────────────
+// Melacak user yang sedang aktif online untuk multi-touchpoint follow-up.
+// Tidak perlu DB — data ini ephemeral (hilang saat restart, tidak masalah).
+//
+// Struktur per user:
+//   lastActivity : timestamp terakhir user kirim pesan/klik
+//   timers       : array setTimeout yang dijadwalkan (bisa di-cancel)
+//   touchpoints  : berapa follow-up sudah dikirim dalam sesi ini
+//   sessionStart : kapan sesi dimulai
+//
+const activeSessions = new Map(); // userId → { lastActivity, timers[], touchpoints, sessionStart }
+
+const SESSION_IDLE_MS    = 10 * 60 * 1000; // 10 menit diam → session dianggap berakhir
+const MAX_TOUCHPOINTS    = 3;               // Maks 3 follow-up per sesi (tidak termasuk touchpoint pertama)
+
+function getSession(userId) {
+  return activeSessions.get(String(userId));
+}
+
+function updateSessionActivity(userId) {
+  const id = String(userId);
+  const existing = activeSessions.get(id);
+  if (existing) {
+    existing.lastActivity = Date.now();
+  } else {
+    activeSessions.set(id, {
+      lastActivity  : Date.now(),
+      sessionStart  : Date.now(),
+      timers        : [],
+      touchpoints   : 0
+    });
+  }
+}
+
+function isSessionStillActive(userId) {
+  const session = getSession(userId);
+  if (!session) return false;
+  return (Date.now() - session.lastActivity) < SESSION_IDLE_MS;
+}
+
+function clearSessionTimers(userId) {
+  const session = getSession(userId);
+  if (session) {
+    session.timers.forEach(t => clearTimeout(t));
+    session.timers = [];
+  }
+}
+
+function endSession(userId) {
+  clearSessionTimers(userId);
+  activeSessions.delete(String(userId));
+}
+
+// Bersihkan sesi lama tiap 30 menit (memory hygiene)
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, session] of activeSessions.entries()) {
+    if (now - session.lastActivity > SESSION_IDLE_MS * 3) {
+      endSession(uid);
+    }
+  }
+}, 30 * 60 * 1000);
+
 // ─── HELPERS ────────────────────────────────────────────────────────────────
 
 // [FIX] Mencegah spam jam 2 pagi tanpa mematikan fitur cron per jam.
@@ -2949,6 +3012,10 @@ async function triggerRealtimeMarketing(bot, userId) {
       // last_broadcast_at tetap di-update oleh sendSafe() untuk rate limit harian
       // last_rt_sent_at dipakai khusus untuk cooldown 6 jam RT Marketing
       await User.findByIdAndUpdate(userId, { $set: { last_rt_sent_at: new Date() } }).catch(() => {});
+
+      // [SESSION] Mulai sesi & jadwalkan follow-up touchpoints
+      // T+5min, T+15min, T+30min — hanya dikirim jika user masih aktif & belum checkout
+      scheduleSessionFollowups(bot, userId);
     }
 
   } catch (err) {
@@ -2956,6 +3023,137 @@ async function triggerRealtimeMarketing(bot, userId) {
     logger.warn(`[RT-MARKETING] Error untuk userId=${userId}: ${err.message}`);
   }
 }
+
+// ─── SESSION FOLLOW-UP ────────────────────────────────────────────────────────
+// Jadwalkan 3 touchpoint setelah RT Marketing pertama berhasil dikirim.
+// Setiap touchpoint cek: user masih aktif? belum checkout? rate limit OK?
+// Konten berbeda tiap touchpoint agar tidak terasa spam.
+
+const FOLLOWUP_DELAYS = [
+  5  * 60 * 1000,  // T+5 menit  → guide produk
+  15 * 60 * 1000,  // T+15 menit → FOMO / social proof
+  30 * 60 * 1000,  // T+30 menit → last offer
+];
+
+function scheduleSessionFollowups(bot, userId) {
+  updateSessionActivity(userId);
+  const session = getSession(userId);
+  if (!session) return;
+
+  FOLLOWUP_DELAYS.forEach((delay, idx) => {
+    const t = setTimeout(async () => {
+      try {
+        await sendSessionFollowup(bot, userId, idx + 1);
+      } catch (e) {
+        logger.warn(`[SESSION-FU] Error touchpoint ${idx+1} untuk ${userId}: ${e.message}`);
+      }
+    }, delay);
+    session.timers.push(t);
+  });
+
+  logger.info(`[SESSION] Sesi dimulai untuk ${userId} — 3 follow-up dijadwalkan (T+5, T+15, T+30 menit)`);
+}
+
+async function sendSessionFollowup(bot, userId, touchpoint) {
+  // ── Guard checks ──────────────────────────────────────────────────────────
+  if (!isMarketingEnabled()) return;
+  if (!isSessionStillActive(userId)) {
+    logger.info(`[SESSION-FU] User ${userId} tidak aktif lagi, batal touchpoint ${touchpoint}`);
+    endSession(userId);
+    return;
+  }
+
+  const user = await User.findById(userId).lean();
+  if (!user || user.is_blocked || user.opt_out) { endSession(userId); return; }
+
+  // Quiet hour 00-07 WIB — pakai user object yang nyata
+  if (isUserQuietHour(user)) {
+    logger.info(`[SESSION-FU] Quiet hour, batal touchpoint ${touchpoint} untuk ${userId}`);
+    return;
+  }
+
+  // Jangan ganggu saat checkout
+  if (await isUserInCheckout(userId)) {
+    logger.info(`[SESSION-FU] User ${userId} sedang checkout, batal touchpoint ${touchpoint}`);
+    endSession(userId);
+    return;
+  }
+
+  // Rate limit harian (max 3 pesan/hari)
+  const canSend = await checkAndIncrementRateLimit(userId);
+  if (!canSend) {
+    logger.info(`[SESSION-FU] Rate limit harian, batal touchpoint ${touchpoint} untuk ${userId}`);
+    endSession(userId);
+    return;
+  }
+
+  // Ambil produk yang belum dibeli
+  const allProducts = await Product.find({ active: 1 }).lean();
+  const { keyboard, products: unboughtProducts } = await buildAllProductsKeyboard(userId, allProducts, 0);
+  if (!unboughtProducts.length) { endSession(userId); return; } // Sudah beli semua
+
+  const name = user.first_name || 'Bos';
+  const totalBuyers = (await Order.distinct('user_id', { status: 'SUCCESS' })).length;
+  const recentBuyers = await Order.countDocuments({
+    status: 'SUCCESS',
+    created_at: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+  });
+
+  let msg = '';
+
+  if (touchpoint === 1) {
+    // T+5 menit: Guide — bantu user pilih produk
+    const prodNames = unboughtProducts.slice(0, 3).map(p => `• <b>${p.name}</b>`).join('\n');
+    msg = `🤔 <b>Bingung pilih yang mana, ${name}?</b>\n\n` +
+          `Ini yang paling banyak dipilih member baru:\n${prodNames}\n\n` +
+          `<blockquote>Semua akses permanen, bayar sekali. Tidak ada biaya bulanan.</blockquote>\n\n` +
+          `👇 <b>Pilih satu dan lihat detailnya:</b>`;
+  } else if (touchpoint === 2) {
+    // T+15 menit: FOMO + social proof nyata
+    const socialLine = recentBuyers > 0
+      ? `${recentBuyers} orang sudah gabung dalam 24 jam terakhir.`
+      : `${totalBuyers}+ member sudah aktif di dalam.`;
+    msg = `⚡ <b>${socialLine}</b>\n\n` +
+          `Kamu sudah di sini ${Math.round((Date.now() - (getSession(userId)?.sessionStart || Date.now())) / 60000)} menit.\n` +
+          `Banyak yang ambil keputusan lebih cepat dari itu.\n\n` +
+          `<blockquote>Penawaran hari ini — termasuk diskon yang sudah kami aktifkan — berlaku sampai tengah malam.</blockquote>\n\n` +
+          `👇 <b>Ambil sekarang sebelum habis:</b>`;
+  } else if (touchpoint === 3) {
+    // T+30 menit: Last offer — diskon ekstra tipis
+    msg = `🎁 <b>${name}, satu penawaran terakhir sebelum kamu pergi.</b>\n\n` +
+          `Kami aktifkan diskon ekstra khusus sesi ini — tidak akan muncul lagi setelah kamu tutup bot.\n\n` +
+          `<blockquote>Ini bukan template. Ini genuinely last call untuk harga ini hari ini.</blockquote>\n\n` +
+          `👇 <b>Klik tombol di bawah — sekarang atau tidak sama sekali:</b>`;
+  }
+
+  if (!msg) return;
+
+  const hFile = await getSetting('header_file_id', 'https://media.giphy.com/media/3o7TKSjRrfIPjeiVyM/giphy.gif');
+  const hType = await getSetting('header_type', 'url');
+
+  const result = await sendSafe(bot, userId, msg, {
+    media: hFile, mediaType: hType,
+    keyboard,
+    campaign: `RT_SESSION_T${touchpoint}`,
+    userName: name,
+    reason: `session_followup_t${touchpoint}`
+  });
+
+  if (result.ok) {
+    logger.info(`[SESSION-FU] ✅ Touchpoint ${touchpoint} terkirim ke ${userId} (${name})`);
+    const session = getSession(userId);
+    if (session) session.touchpoints = touchpoint;
+  }
+}
+
+// Export endSession agar bisa dipanggil dari index.js saat user mulai checkout
+function cancelSessionOnCheckout(userId) {
+  if (getSession(userId)) {
+    logger.info(`[SESSION] Checkout dimulai → cancel semua follow-up untuk ${userId}`);
+    endSession(userId);
+  }
+}
+
 
 module.exports = {
   startCron,
@@ -2973,6 +3171,8 @@ module.exports = {
   acquireCampaignLock,         // ← export for unit tests
   isUserInCheckout,            // ← export for unit tests
   classifyNonBuyer,            // ← export for unit tests (Task 6.1.4)
-  isInCooldown                 // ← export for unit tests (Task 6.3.1)
+  isInCooldown,                // ← export for unit tests (Task 6.3.1)
+  updateSessionActivity,       // ← dipanggil tiap user aktif dari index.js
+  cancelSessionOnCheckout,     // ← dipanggil saat user mulai checkout
 };
 

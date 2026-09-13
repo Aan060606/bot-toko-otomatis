@@ -839,10 +839,14 @@ bot.use(async (ctx, next) => {
       ).exec().catch(err => logger.error("Gagal update user tracking:", err.message));
     }
 
-    // [REALTIME MARKETING] Trigger SETIAP user aktif — bukan jam 10:00 pagi
-    // Cooldown 48 jam dihandle di dalam triggerRealtimeMarketing (cek last_broadcast_at)
-    // Jadi aman dipanggil setiap user kirim pesan — tidak akan spam
-    // [FIX BUG #15] Delay 30 detik: give users time to explore naturally before marketing
+    // [SESSION] Update timestamp aktivitas user untuk session tracker
+    // Dipanggil SETIAP interaksi → session follow-up tahu user masih online
+    scheduler.updateSessionActivity(userId);
+
+    // [REALTIME MARKETING] Trigger saat user aktif pertama kali dalam sesi
+    // Session follow-up (T+5, T+15, T+30 menit) dijadwalkan di dalam triggerRealtimeMarketing
+    // Cooldown RT 6 jam (last_rt_sent_at) — terpisah dari campaign 48 jam
+    // Delay 30 detik: beri waktu user eksplorasi dulu sebelum dapat pesan
     setTimeout(() => {
       scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
     }, 30000);
@@ -2499,6 +2503,11 @@ bot.action(/^buy_now_(.+)$/, async (ctx) => {
 
     let amount = await store.getCartTotal(userId);
     logger.checkout.attempt(userId, productId, amount);
+
+    // [SESSION] Cancel semua follow-up timer saat user mulai checkout
+    // Mencegah pesan marketing masuk saat user sedang scan QR
+    scheduler.cancelSessionOnCheckout(userId);
+
     msg = await ctx.reply("⏳ Menyiapkan pembayaran QRIS...");
 
     let buyerName = ctx.from.username ? `@${ctx.from.username}` : (ctx.from.first_name || "Pembeli");
