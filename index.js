@@ -3323,12 +3323,17 @@ if (process.env.NODE_ENV !== "test") {
     logger.info('Menerima SIGINT, mematikan bot...');
     bot.stop('SIGINT');
     require('mongoose').disconnect();
+    // [FIX] Garantikan exit dalam 2 detik agar Docker tidak perlu SIGKILL
+    setTimeout(() => process.exit(0), 2000);
   });
   
   process.once('SIGTERM', () => {
     logger.info('Menerima SIGTERM, mematikan bot...');
     bot.stop('SIGTERM');
     require('mongoose').disconnect();
+    // [FIX] Garantikan exit dalam 2 detik — jika bot dalam 60s wait, bot.stop() no-op
+    // Tanpa ini Docker tunggu 10s lalu SIGKILL → polling slot lambat dilepas Telegram
+    setTimeout(() => process.exit(0), 2000);
   });
 }
 
