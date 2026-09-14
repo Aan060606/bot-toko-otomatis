@@ -395,8 +395,10 @@ async function onPaymentSuccess(ctx, chatId, msgId, donationId, orderId, qrMsgId
             purchase_count: newCount,
             total_spent: newSpent,
             last_purchase_at: new Date(),
-            // [FIX DRIP SPAM] Set last_broadcast_at jauh ke depan agar tidak dapat marketing lagi
-            last_broadcast_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+            // [FIX] Cukup set ke now — cooldown 48 jam normal mencegah spam campaign
+            // Sebelumnya: +30 hari ke depan → 84 buyer kena silent ban dari SEMUA marketing
+            // termasuk cross-sell & post-purchase follow-up yang seharusnya dapat
+            last_broadcast_at: new Date()
           });
           logger.info(`[PAYMENT] User ${chatId} purchase_count updated to ${newCount}`);
         } else {
