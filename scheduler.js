@@ -193,10 +193,14 @@ async function isUserInCheckout(userId) {
   const { Order } = require('./database');
   
   try {
-    // Query for any pending order for this user
+    // [FIX BUG#7] Hanya block jika PENDING dalam 35 menit terakhir
+    // Sebelumnya: blok SEMUA PENDING tanpa batas waktu → user terkunci marketing 7 hari
+    // QR Saweria expired dalam 30 menit → setelah 35 menit, order dianggap abandoned
+    const thirtyFiveMinutesAgo = new Date(Date.now() - 35 * 60 * 1000);
     const pendingOrder = await Order.findOne({ 
       user_id: userId, 
-      status: 'PENDING' 
+      status: 'PENDING',
+      created_at: { $gte: thirtyFiveMinutesAgo }
     }).lean();
     
     // Return true if pending order exists (user is in checkout)
@@ -1089,7 +1093,8 @@ async function runCrossSellCampaign(bot, allProducts, globalTopProducts, similar
       continue;
     }
 
-    if (isInCooldown(user, { currentCampaign: 'VIP_WINBACK' })) { stats.skipped++; continue; }
+    // [FIX BUG#4] Tag campaign yang benar — sebelumnya salah copy-paste 'VIP_WINBACK'
+    if (isInCooldown(user, { currentCampaign: 'CROSS_SELL' })) { stats.skipped++; continue; }
 
     const boughtIds = await getBoughtProductIds(user._id);
     if (boughtIds.length >= totalCount) { stats.complete++; continue; }
@@ -1247,15 +1252,17 @@ async function runDripFollowUp(bot) {
       { stage: 0, converted: false, sent_at: { $lte: sevenDaysAgo } },
       { $set: { converted: true, exited_reason: 'STUCK_STAGE0' } }
     );
-    // [FIX BUG#1] Pastikan semua drip buyer ter-mark converted (safety net)
+    // [FIX BUG#5] Exclude CROSS_SELL dari buyer cleanup
+    // Sebelumnya: semua DripLog buyer (termasuk CROSS_SELL) dimark converted → Cross-sell S2/S3 dead code
+    // Cross-sell DripLog MEMANG milik buyer — jangan dihapus sebelum waktunya
     const buyerUserIds = await Order.distinct('user_id', { status: 'SUCCESS' });
     if (buyerUserIds.length > 0) {
       const buyerDripFixed = await DripLog.updateMany(
-        { user_id: { $in: buyerUserIds }, converted: false },
+        { user_id: { $in: buyerUserIds }, converted: false, campaign_type: { $ne: 'CROSS_SELL' } },
         { $set: { converted: true, exited_reason: 'BUYER_CLEANUP' } }
       );
       if (buyerDripFixed.modifiedCount > 0)
-        console.log(`[DRIP] Cleanup buyer drip: ${buyerDripFixed.modifiedCount} logs dimark converted`);
+        console.log(`[DRIP] Cleanup buyer drip: ${buyerDripFixed.modifiedCount} logs dimark converted (CROSS_SELL dikecualikan)`);
     }
   } catch (err) {
     console.error('[DRIP] Gagal eksekusi cleanup:', err);
@@ -1662,7 +1669,9 @@ async function runDripFollowUp(bot) {
         await DripLog.findByIdAndUpdate(log._id, { stage: 4, sent_at: new Date() });
         await Discount.findOneAndUpdate(
           { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
-          { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
+          // [FIX BUG#6] Samakan valid_until dengan copy ("72 jam") → 48 jam (tengah)
+          // Sebelumnya: copy bilang 72 jam tapi DB set 24 jam → user balik esok hari, diskon hangus
+          { $set: { value: stage4DiscPct, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
           { upsert: true }
         );
         stats.sent++;
@@ -2337,8 +2346,10 @@ async function runMarketingCampaign(bot, todayStr) {
     console.log('[MARKETING] Campaign 1: Non-Buyer...');
     nonBuyerStats = await runNonBuyerCampaign(bot);
     
-    // Only advance progress if it's a peak hour, so next campaigns can run later
-    if (isPeakHour || Object.values(nonBuyerStats).reduce((a,b)=>a+b,0) > 0) {
+    // [FIX BUG#1] Hanya advance jika benar-benar kirim pesan (bukan hanya skipped)
+    // Sebelumnya: reduce() ikut hitung skipped → COMPLETED jam 00:00 → campaign mati seharian
+    const actuallySent = (nonBuyerStats.cold || 0) + (nonBuyerStats.abandon || 0) + (nonBuyerStats.inactive || 0);
+    if (isPeakHour || actuallySent > 0) {
       await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'NON_BUYER_DONE' });
       progress.campaign = 'NON_BUYER_DONE';
     }
@@ -2348,11 +2359,9 @@ async function runMarketingCampaign(bot, todayStr) {
   // VIP Win-back: runs at :30 minutes (separate cron)
   // Cross-sell: runs at :15 minutes (separate cron)
   // DRIP: runs at :45 minutes (separate cron)
-  // Flash Sale and other campaigns continue in orchestrated flow
+  // [FIX BUG#2] Flash Sale dipindah ke cron terpisah jam 20:00 WIB hari Minggu
+  // Sebelumnya: dipanggil setelah NON_BUYER_DONE (jam 00:00) → jam check < 20 selalu true → dead code
   if (progress.campaign === 'NON_BUYER_DONE') {
-    const allProducts = await Product.find({ active: 1 }).lean();
-    console.log('[MARKETING] Campaign 6: Flash Sale (Minggu Malam)...');
-    flashSaleStats = await runFlashSaleCampaign(bot, allProducts); // [UPGRADE 2]
     await CronProgress.findByIdAndUpdate(progress._id, { campaign: 'COMPLETED', completed: true });
   }
 
@@ -2493,14 +2502,36 @@ async function runVIPWinBackCampaign(bot) {
       continue;
     }
     
-    // [FIX] Ganti Markdown (*bold*) ke HTML (<b>bold</b>) — sendSafe pakai parse_mode HTML
+    // [FIX BUG#3] VIP Winback: tambah keyboard tombol beli + diskon 20% + label benar
+    // Sebelumnya: pesan tanpa tombol beli, tanpa diskon, label 'BROADCAST_MANUAL'
+    // Buyer lama dapat pesan kosong setiap 48 jam tanpa bisa checkout
+    const winbackDisc = 20;
+    await Discount.findOneAndUpdate(
+      { target_user_id: Number(user._id), active: true },
+      { $setOnInsert: { target_user_id: Number(user._id), value: winbackDisc, active: true,
+          valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000), created_at: new Date() } },
+      { upsert: true }
+    ).catch(() => {});
+
+    const allProds = await Product.find({ active: 1 }).lean();
+    const boughtWinback = await getBoughtProductIds(user._id);
+    const unboughtWinback = allProds.filter(p => !boughtWinback.includes(String(p._id)));
+    const winbackKeyboard = unboughtWinback.length > 0
+      ? Markup.inlineKeyboard(unboughtWinback.slice(0, 3).map(p =>
+          [Markup.button.callback(`🛒 ${p.name} — Hemat ${winbackDisc}%`, `buy_${p._id}`)]))
+      : null;
+
     const msg =
-      `👋 <b>Halo ${user.first_name || 'VIP'}!</b>\n\n` +
-      `Lama tak jumpa. Kami sangat menghargai kepercayaan kamu selama ini.\n\n` +
-      `Ada konten baru yang mungkin kamu suka — boleh cek dulu katalog terbaru kami?\n\n` +
-      `<blockquote>Sebagai member setia, kamu bisa request konten spesial langsung ke admin.</blockquote>\n\n` +
-      `💬 Balas pesan ini kalau ada yang bisa kami bantu!`;
-    const result = await sendSafe(bot, user._id, msg, { campaign: 'BROADCAST_MANUAL', userName: user.first_name || '?' });
+      `🎁 <b>Halo ${user.first_name || 'VIP'}, kami kangen kamu!</b>\n\n` +
+      `Sebagai member setia, kami siapkan <b>diskon ${winbackDisc}% eksklusif</b> khusus untuk kamu.\n\n` +
+      `Koleksi sudah bertambah sejak terakhir kamu mampir — ada ${allProds.length} produk aktif sekarang.\n\n` +
+      `<blockquote>Diskon ${winbackDisc}% ini hanya berlaku 48 jam. Tidak perlu kode apapun — otomatis terpotong saat checkout.</blockquote>\n\n` +
+      `👇 <b>Pilih produk dan langsung dapatkan harga spesial:</b>`;
+    const result = await sendSafe(bot, user._id, msg, {
+      campaign: 'VIP_WINBACK',
+      userName: user.first_name || '?',
+      ...(winbackKeyboard ? { keyboard: winbackKeyboard } : {})
+    });
     if (result.ok) count++;
     await delay(1500);
   }
@@ -2807,6 +2838,19 @@ function startCron(bot) {
   }, { timezone: 'Asia/Jakarta' });
 
   // ── TASK 6: Auto-Close Order Macet — Setiap hari jam 04:00 WIB ──────────────
+  // [FIX BUG#2] Flash Sale sekarang jalan via cron terpisah jam 20:00 WIB hari Minggu
+  // Sebelumnya: dipanggil di dalam NON_BUYER_DONE (jam 00:00) → jam < 20 → dead code seumur hidup
+  const flashSaleTask = cron.schedule('0 20 * * 0', async () => {
+    console.log('[CRON] ⚡ Flash Sale Minggu Malam mulai...');
+    try {
+      const allProducts = await Product.find({ active: 1 }).lean();
+      const result = await runFlashSaleCampaign(bot, allProducts);
+      console.log(`[CRON] ✅ Flash Sale selesai: sent=${result.sent} skipped=${result.skipped}`);
+    } catch (err) {
+      console.error('[CRON] ❌ Flash Sale error:', err.message);
+    }
+  }, { timezone: 'Asia/Jakarta' });
+
   const stuckOrderTask = cron.schedule('0 4 * * *', async () => {
     console.log('[CRON] ⏰ Membersihkan order macet...');
     try {
@@ -2821,7 +2865,7 @@ function startCron(bot) {
     }
   }, { timezone: 'Asia/Jakarta' });
 
-  cronTasks = [marketingTask, crossSellTask, vipWinbackTask, dripTask, backupTask, cleanupTask, metricsTask, discountReminderTask, stuckOrderTask];
+  cronTasks = [marketingTask, crossSellTask, vipWinbackTask, dripTask, backupTask, cleanupTask, metricsTask, discountReminderTask, flashSaleTask, stuckOrderTask];
   
   // [FIX BUG#8] Startup run: hanya jalankan drip + cart-abandon saat restart
   // BUKAN runMarketingCampaign penuh — karena itu bisa kirim campaign utama berkali-kali
