@@ -307,11 +307,12 @@ async function getMenuDiscountText(userId) {
       if (!bestFirstTime || deduction > bestFirstTime.deduction) bestFirstTime = { ...d, deduction };
     } else if (d.trigger_event === 'LOYALTY' && user.purchase_count >= 5) {
       if (!bestLoyalty || deduction > bestLoyalty.deduction) bestLoyalty = { ...d, deduction };
-    } else if ((!d.trigger_event || d.trigger_event === 'ALL') && d.target_user_id) {
-      // Diskon personal (target_user_id set) — dari drip atau cart abandon
+    } else if (d.target_user_id && d.target_user_id === numUserId) {
+      // [FIX] Semua diskon personal (REALTIME, DRIP, VIP_WINBACK, CROSS_SELL, null, dll)
+      // Sebelumnya: hanya cek trigger_event === null → REALTIME/DRIP tidak tampil di menu
       if (!bestPersonal || deduction > bestPersonal.deduction) bestPersonal = { ...d, deduction };
-    } else if (!d.trigger_event || d.trigger_event === 'ALL') {
-      // Diskon global (flash sale dll)
+    } else if (!d.target_user_id) {
+      // Diskon global (flash sale, semua user)
       if (!bestGlobal || deduction > bestGlobal.deduction) bestGlobal = { ...d, deduction };
     }
   }
