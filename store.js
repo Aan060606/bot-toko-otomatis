@@ -233,14 +233,25 @@ async function applyAutomaticDiscount(userId, productId, basePrice) {
     if (discount.min_purchase > basePrice) continue;
 
     // Cek trigger
+    // [FIX KRITIS] Sebelumnya: REALTIME tidak punya handler → isEligible=false selamanya
+    // Bukti: 43 diskon REALTIME dibuat, 0 pernah dipakai (trigger_event='REALTIME' tidak dikenali)
     let isEligible = false;
     if (discount.trigger_event === 'FIRST_TIME' && user.purchase_count === 0) isEligible = true;
     else if (discount.trigger_event === 'LOYALTY' && user.purchase_count >= 5) isEligible = true;
     else if (discount.trigger_event === 'CART_ABANDON') {
-      const lastCheckout = await UserEvent.findOne({ user_id: numUserId, event_type: 'CHECKOUT' }).sort('-created_at');
-      if (lastCheckout && (now - lastCheckout.created_at) > 3600000) isEligible = true; // 1 jam
-    } else if (!discount.trigger_event || discount.trigger_event === 'ALL') {
-      isEligible = true; // Diskon personal dari Drip Stage 3 tidak punya trigger, langsung berlaku
+      const lastCheckout = await UserEvent.findOne({ user_id: numUserId, event_type: 'CHECKOUT' }).sort('-created_at').lean();
+      if (lastCheckout && (now - new Date(lastCheckout.created_at)) > 3600000) isEligible = true;
+    } else if (
+      discount.trigger_event === 'REALTIME'    || // Diskon dari RT Marketing
+      discount.trigger_event === 'VIP_WINBACK' || // Diskon dari VIP Winback
+      discount.trigger_event === 'DRIP'        || // Diskon dari Drip campaign
+      discount.trigger_event === 'CROSS_SELL'  || // Diskon dari Cross-sell
+      discount.trigger_event === 'BROADCAST'   || // Diskon dari campaign broadcast
+      !discount.trigger_event || discount.trigger_event === 'ALL'
+    ) {
+      // Semua diskon personal (target_user_id spesifik) langsung eligible
+      // Jika target_user_id cocok dengan user yang checkout, diskon langsung berlaku
+      isEligible = true;
     }
 
     if (isEligible) {

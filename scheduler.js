@@ -1574,9 +1574,11 @@ async function runDripFollowUp(bot) {
           valid_until: { $gt: new Date() }
         }).lean();
         if (!existingS3Disc) {
+          // [FIX] 72 jam — sesuai copy teks yang bilang 'Berlaku 72 jam'
+          // Sebelumnya: 24 jam — user balik keesokan hari, diskon sudah hangus
           await Discount.findOneAndUpdate(
             { target_user_id: Number(user._id), target_product_id: String(log.product_id), trigger_event: 'DRIP', type: 'PERCENTAGE', active: true },
-            { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
+            { $set: { value: discountRule.percentage, valid_until: new Date(Date.now() + 72 * 60 * 60 * 1000) } },
             { upsert: true }
           );
         }
@@ -2965,11 +2967,14 @@ async function triggerRealtimeMarketing(bot, userId) {
     const segment = await classifyNonBuyer({ ...user, last_active_at: historicalLastActive });
 
     // 5. Tentukan diskon berdasarkan segment
+    // [FIX] Naikkan semua nilai — 5% terlalu kecil (Rp2.600 dari Rp52rb tidak memotivasi)
+    // Data: 8 diskon dipakai semua 5%, tapi conversion rate masih rendah
+    // Strategi: makin lama tidak aktif, makin besar diskon (urgency lebih kuat)
     let discountVal = 0;
-    if      (segment === 'HOT')   discountVal = 5;
-    else if (segment === 'WARM')  discountVal = 10;
-    else if (segment === 'COLD')  discountVal = 15;
-    else if (segment === 'GHOST') discountVal = 20;
+    if      (segment === 'HOT')   discountVal = 15;  // Aktif tadi → butuh nudge kecil
+    else if (segment === 'WARM')  discountVal = 20;  // Beberapa hari lalu → perlu lebih
+    else if (segment === 'COLD')  discountVal = 25;  // Seminggu lalu → perlu tawaran kuat
+    else if (segment === 'GHOST') discountVal = 30;  // Lama tidak aktif → last chance offer
 
     // 6. Ambil produk aktif & build keyboard
     const allProducts = await Product.find({ active: 1 }).lean();
@@ -2978,7 +2983,7 @@ async function triggerRealtimeMarketing(bot, userId) {
     const { keyboard, products: unboughtProducts } = await buildAllProductsKeyboard(userId, allProducts, discountVal);
     if (!keyboard || !unboughtProducts.length) return; // User sudah beli semua produk
 
-    // 7. Buat diskon di DB jika belum ada (agar berlaku saat checkout)
+    // 7. Buat/update diskon di DB (trigger_event='REALTIME' — sekarang dikenali applyAutomaticDiscount)
     if (discountVal > 0) {
       const existingDisc = await Discount.findOne({
         target_user_id: Number(userId),
@@ -2986,9 +2991,10 @@ async function triggerRealtimeMarketing(bot, userId) {
         valid_until: { $gt: new Date() }
       }).lean();
       if (!existingDisc) {
+        // [FIX] valid_until 48 jam — user yang balik besok tetap dapat diskon
         await Discount.findOneAndUpdate(
           { target_user_id: Number(userId), target_product_id: null, trigger_event: 'REALTIME', type: 'PERCENTAGE', active: true },
-          { $set: { value: discountVal, valid_until: new Date(Date.now() + 24 * 60 * 60 * 1000) } },
+          { $set: { value: discountVal, valid_until: new Date(Date.now() + 48 * 60 * 60 * 1000) } },
           { upsert: true }
         );
       }
