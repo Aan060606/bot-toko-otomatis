@@ -808,10 +808,10 @@ async function runNonBuyerCampaign(bot) {
     // WARM = sudah kenal produk, kasih diskon medium biar push ke checkout
     // COLD/GHOST = sudah lama hilang, kasih diskon besar re-engagement
     let discountVal = 0;
-    if (segment === 'HOT')   discountVal = 5;  // 5% — gentle nudge
-    else if (segment === 'WARM')  discountVal = 10; // 10% — medium push
-    else if (segment === 'COLD')  discountVal = 15; // 15% — re-engagement
-    else if (segment === 'GHOST') discountVal = 20; // 20% — last effort
+    if      (segment === 'HOT')   discountVal = 15; // 15%
+    else if (segment === 'WARM')  discountVal = 20; // 20%
+    else if (segment === 'COLD')  discountVal = 25; // 25%
+    else if (segment === 'GHOST') discountVal = 30; // 30%
 
     // Bangun keyboard dengan diskon dinamis
     const { keyboard: allKeyboard, products: unboughtProducts } = await buildAllProductsKeyboard(user._id, allProducts, discountVal);
@@ -1439,10 +1439,10 @@ async function runDripFollowUp(bot) {
         // Classify user segment for progressive discount
         const segment = await classifyNonBuyer(user);
         let discountVal = 0;
-        if      (segment === 'HOT')   discountVal = 5;   // 5% — gentle nudge
-        else if (segment === 'WARM')  discountVal = 15;  // 15% — PROGRESSIVE from 10% at S1 (Bug #6 fix)
-        else if (segment === 'COLD')  discountVal = 15;  // 15% — re-engagement
-        else if (segment === 'GHOST') discountVal = 20;  // 20% — last effort
+        if      (segment === 'HOT')   discountVal = 15; // 15%
+        else if (segment === 'WARM')  discountVal = 20; // 20%
+        else if (segment === 'COLD')  discountVal = 25; // 25%
+        else if (segment === 'GHOST') discountVal = 30; // 30%
         
         const s2DiscAmt = Math.floor((product.price || 0) * (discountVal / 100));
         keyboard = await buildProductMarkup(user._id, product, s2DiscAmt);
@@ -2929,20 +2929,36 @@ async function triggerRealtimeMarketing(bot, userId) {
       return;
     }
 
-    // [FIX RT-COOLDOWN] RT Marketing pakai cooldown TERPISAH dari campaign besar
-    // Masalah: last_broadcast_at dipakai oleh campaign jam 10 DAN RT → user yang dapat
-    // campaign pagi langsung diblock RT 48 jam → tidak dapat marketing saat online malam.
-    // Data: 42 dari 49 user aktif diblok cooldown padahal mereka online dan siap convert.
-    // Fix: RT pakai last_rt_sent_at dengan cooldown 6 jam (bukan 48 jam).
+    // [FIX RACE CONDITION] RT Marketing double-send karena race condition:
+    // Masalah: findById() → cek cooldown → kirim → update last_rt_sent_at
+    // Jika 3 event datang bersamaan, semua baca last_rt_sent_at = null → semua kirim!
+    // Bukti log: elrey dapat 3 pesan RT_HOT dalam 30 detik (20:34:46, 20:35:11, 20:35:16)
+    // Fix: atomic findOneAndUpdate sekaligus jadi "claim" slot kirim.
+    // Hanya 1 yang berhasil claim (dokumen berubah) — sisanya return karena sudah claimed.
     const RT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 jam
-    if (user.last_rt_sent_at) {
-      const msSinceLastRT = Date.now() - new Date(user.last_rt_sent_at).getTime();
-      if (msSinceLastRT < RT_COOLDOWN_MS) {
-        const minutesLeft = Math.round((RT_COOLDOWN_MS - msSinceLastRT) / 60000);
-        logger.info(`[RT-MARKETING] Cooldown RT aktif untuk ${userId}: ${minutesLeft} menit lagi`);
-        return;
-      }
+    const claimCutoff = new Date(Date.now() - RT_COOLDOWN_MS);
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: userId,
+        is_blocked: { $ne: true },
+        opt_out:    { $ne: true },
+        $or: [
+          { last_rt_sent_at: null },
+          { last_rt_sent_at: { $exists: false } },
+          { last_rt_sent_at: { $lt: claimCutoff } }
+        ]
+      },
+      { $set: { last_rt_sent_at: new Date() } },
+      { new: false } // return dokumen LAMA (untuk ambil data user)
+    ).lean();
+
+    if (!claimed) {
+      // User tidak ditemukan, blocked, opt-out, atau masih dalam cooldown 6 jam
+      return;
     }
+
+    // Update referensi user dengan data terbaru dari claimed
+    Object.assign(user, claimed);
 
     // [FIX BUG #1, #16] Capture historical last_active_at BEFORE any updates
     // This timestamp was set during the user's PREVIOUS activity, not the current message
