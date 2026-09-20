@@ -866,12 +866,24 @@ bot.on('callback_query', async (ctx, next) => {
     const userId = ctx.from.id;
     const now = Date.now();
     const lastClick = clickCooldowns.get(userId) || 0;
-    
-    // Cooldown 3 detik
+
+    // Cooldown 3 detik anti-spam tombol
     if (now - lastClick < 3000) {
       return ctx.answerCbQuery("⏳ Mohon tunggu 3 detik sebelum memencet tombol lagi.", { show_alert: true });
     }
     clickCooldowns.set(userId, now);
+
+    // [FIX KRITIS] RT Marketing juga trigger dari klik tombol
+    // BUG: bot ini adalah toko — user TIDAK PERNAH ketik pesan, hanya klik tombol.
+    // Sebelumnya triggerRealtimeMarketing hanya di bot.on('message') → TIDAK PERNAH JALAN.
+    // Bukti: last_rt_sent_at = 0 user sepanjang masa (212 aktif, 0 pernah dapat RT).
+    // Fix: tambahkan trigger di sini juga. Atomic cooldown 6 jam di scheduler
+    //      memastikan user tidak spam (hanya 1 yang berhasil claim per 6 jam).
+    // Delay 30 detik: beri waktu user eksplorasi menu dulu sebelum dapat pesan.
+    scheduler.updateSessionActivity(userId);
+    setTimeout(() => {
+      scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
+    }, 30000);
   }
   return next();
 });
