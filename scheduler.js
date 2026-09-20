@@ -2576,6 +2576,9 @@ async function getCampaignMetrics() {
 }
 
 let isMarketingRunning = false;
+// [FIX DOUBLE-SEND] In-memory debounce untuk triggerRealtimeMarketing
+// Mencegah double-trigger dari message + callback_query handler bersamaan
+const rtInFlight = new Set();
 
 function startCron(bot) {
   // Bersihkan semua task lama (anti-duplikasi)
@@ -2916,6 +2919,16 @@ function stopDailyCron() {
 async function triggerRealtimeMarketing(bot, userId) {
   try {
     if (!isMarketingEnabled()) return;
+
+    // [GUARD 1] In-memory debounce — cegah double trigger dari message + callback_query
+    // Masalah: Pppppp dapat 2x dalam 2 menit (07:27 + 07:28) karena kedua handler
+    // (bot.on('message') DAN bot.on('callback_query')) sama-sama setTimeout 5 detik.
+    // Atomic DB tidak cukup karena kedua setTimeout jalan bersamaan sebelum DB update.
+    // Fix: Set in-flight per userId, clear setelah 10 detik.
+    const rtKey = `rt_${userId}`;
+    if (rtInFlight.has(rtKey)) return; // Sudah ada yang jalan untuk user ini
+    rtInFlight.add(rtKey);
+    setTimeout(() => rtInFlight.delete(rtKey), 10000); // clear setelah 10 detik
 
     // 1. Ambil data user
     const user = await User.findById(userId).lean();
