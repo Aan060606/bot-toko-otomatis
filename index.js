@@ -851,7 +851,7 @@ bot.use(async (ctx, next) => {
     // Delay 30 detik: beri waktu user eksplorasi dulu sebelum dapat pesan
     setTimeout(() => {
       scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
-    }, 30000);
+    }, 5000); // 5 detik
   }
   return next();
 });
@@ -883,7 +883,7 @@ bot.on('callback_query', async (ctx, next) => {
     scheduler.updateSessionActivity(userId);
     setTimeout(() => {
       scheduler.triggerRealtimeMarketing(bot, userId).catch(() => {});
-    }, 30000);
+    }, 5000); // 5 detik
   }
   return next();
 });
