@@ -3087,25 +3087,33 @@ if (process.env.NODE_ENV !== "test") {
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     } catch (_) {}
 
-    // [FIX 409] startCron dipindah ke DALAM .then() — jangan jalankan startup drip
-    // sebelum bot.launch() sukses. Drip async bisa "racing" dengan polling request
-    // sehingga Telegram menganggap 2 instance aktif → 409.
-    bot.launch({ dropPendingUpdates: true })
-      .then(() => {
-        logger.success("Bot Toko Otomatis berjalan!");
-        scheduler.startCron(bot); // ← Cron dimulai SETELAH polling aktif
+    // [FIX 409] Retry loop dengan deleteWebhook + delay 120 detik per attempt
+    // Masalah: delay 60 detik tidak cukup → Telegram slot masih aktif → 409 lagi
+    // Fix: deleteWebhook sebelum setiap retry + tunggu 120 detik
+    const launchWithRetry = async (attempt = 1) => {
+      try {
+        await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+        await bot.launch({ dropPendingUpdates: true });
+        logger.success(`Bot Toko Otomatis berjalan! (attempt ${attempt})`);
+        scheduler.startCron(bot);
         resumePendingOrders();
-      })
-      .catch(async (err) => {
+      } catch (err) {
         if (err.message && err.message.includes('409')) {
-          logger.error("409 Conflict: Bot sudah berjalan di tempat lain. Tunggu 60 detik lalu restart...");
-          await new Promise(r => setTimeout(r, 60000));
-          process.exit(1);
+          if (attempt >= 5) {
+            logger.error('409 Conflict: Gagal launch setelah 5 attempt. Exit...');
+            process.exit(1);
+          }
+          logger.warn(`[BOT] 409 Conflict attempt ${attempt}/5 — hapus webhook + tunggu 120 detik...`);
+          await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+          await new Promise(r => setTimeout(r, 120000));
+          return launchWithRetry(attempt + 1);
         } else {
-          logger.error("Gagal menjalankan bot:", err.message);
+          logger.error('Gagal menjalankan bot:', err.message);
           process.exit(1);
         }
-      });
+      }
+    };
+    launchWithRetry();
   })();
 
   const http = require("http");
