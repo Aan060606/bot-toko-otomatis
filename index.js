@@ -3082,41 +3082,49 @@ if (process.env.NODE_ENV !== "test") {
     await new Promise(r => setTimeout(r, 55000));
     logger.info('[BOT] Delay selesai, mencoba launch polling...');
 
-    // [FIX KRITIS] startCron dipanggil SEBELUM launchWithRetry
-    // Masalah: Layer 2-7 (cron, drip, cart abandon, dll) mati total karena
-    // startCron hanya dipanggil di dalam bot.launch().then() yang tidak pernah
-    // resolve ketika 409 loop terjadi.
-    // Fix: cron adalah task independen — harus jalan sejak startup, bukan
-    // bergantung pada polling berhasil. RT Marketing (Layer 1) tetap butuh
-    // bot aktif, tapi cron blast (Layer 2-7) bisa jalan tanpa polling.
+    // [FIX KRITIS] startCron SEBELUM semua Telegram API call
+    // Telegram API bisa hang (deleteWebhook/bot.launch tidak resolve/reject)
+    // Cron harus jalan terlepas dari kondisi Telegram connection
     scheduler.startCron(bot);
     resumePendingOrders();
     logger.info('[BOT] Cron marketing dimulai (independen dari polling status)');
 
-    // Panggil deleteWebhook sekali lagi tepat sebelum launch
-    try {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    } catch (_) {}
+    // Helper: timeout wrapper agar tidak hang selamanya
+    const withTimeout = (promise, ms, label) =>
+      Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`TIMEOUT: ${label} tidak respond dalam ${ms/1000}s`)), ms))
+      ]);
 
-    // [FIX 409] Retry loop dengan deleteWebhook + delay 120 detik per attempt
+    // [FIX 409] Retry loop dengan timeout + deleteWebhook per attempt
     const launchWithRetry = async (attempt = 1) => {
       try {
-        await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-        await bot.launch({ dropPendingUpdates: true });
+        await withTimeout(
+          bot.telegram.deleteWebhook({ drop_pending_updates: true }),
+          10000, 'deleteWebhook'
+        ).catch(() => {});
+        logger.info(`[BOT] Launching polling... (attempt ${attempt})`);
+        await withTimeout(
+          bot.launch({ dropPendingUpdates: true }),
+          30000, 'bot.launch'
+        );
         logger.success(`Bot Toko Otomatis berjalan! (attempt ${attempt})`);
       } catch (err) {
-        if (err.message && err.message.includes('409')) {
+        if (err.message && (err.message.includes('409') || err.message.includes('TIMEOUT'))) {
           if (attempt >= 5) {
-            logger.error('409 Conflict: Gagal launch setelah 5 attempt. Exit...');
-            process.exit(1);
+            logger.error(`Gagal launch setelah 5 attempt (${err.message}). Polling tidak aktif, cron tetap jalan.`);
+            return; // JANGAN exit — cron sudah jalan, hanya polling yang gagal
           }
-          logger.warn(`[BOT] 409 Conflict attempt ${attempt}/5 — hapus webhook + tunggu 120 detik...`);
-          await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-          await new Promise(r => setTimeout(r, 120000));
+          logger.warn(`[BOT] attempt ${attempt}/5 gagal (${err.message.substring(0,50)}) — tunggu 60 detik...`);
+          await withTimeout(
+            bot.telegram.deleteWebhook({ drop_pending_updates: true }),
+            10000, 'deleteWebhook-retry'
+          ).catch(() => {});
+          await new Promise(r => setTimeout(r, 60000));
           return launchWithRetry(attempt + 1);
         } else {
           logger.error('Gagal menjalankan bot:', err.message);
-          process.exit(1);
+          // Jangan exit — cron sudah jalan
         }
       }
     };
