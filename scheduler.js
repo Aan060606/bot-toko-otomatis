@@ -135,9 +135,9 @@ async function checkAndIncrementRateLimit(userId) {
     user.marketing_messages_today = 0;
   }
   
-  // Check rate limit (max 3/day)
-  if (user.marketing_messages_today >= 3) {
-    logger.info(`[RATE_LIMIT] User ${userId} exceeded 3 messages/day limit`);
+  // Check rate limit (max 5/day)
+  if (user.marketing_messages_today >= 5) {
+    logger.info(`[RATE_LIMIT] User ${userId} exceeded 5 messages/day limit`);
     return false; // Rate limit exceeded
   }
   
