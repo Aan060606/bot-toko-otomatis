@@ -505,7 +505,7 @@ async function sendSafe(bot, userId, text, options = {}) {
   }
 }
 
-const CAMPAIGN_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48 jam minimum antar campaign
+const CAMPAIGN_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 jam minimum antar campaign
 
 function isInCooldown(user, { bypassForBuyer = false, overrideCooldownMs = null, currentCampaign = null } = {}) {
   if (String(user._id) === String(process.env.ADMIN_CHAT_ID)) return false;
@@ -520,7 +520,7 @@ function isInCooldown(user, { bypassForBuyer = false, overrideCooldownMs = null,
     } else {
       // [FIX BUG #4] For other campaigns, increase MIN_BYPASS_AGE_MS from 5 minutes to 48 hours
       // This prevents spam while allowing funnel progression after sufficient time
-      const MIN_BYPASS_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours
+      const MIN_BYPASS_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours (dari 48h — data: 99.6% user diblok cooldown)
       if (!user.last_broadcast_at || (new Date() - new Date(user.last_broadcast_at)) >= MIN_BYPASS_AGE_MS) {
         return false;
       }
