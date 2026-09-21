@@ -3082,21 +3082,28 @@ if (process.env.NODE_ENV !== "test") {
     await new Promise(r => setTimeout(r, 55000));
     logger.info('[BOT] Delay selesai, mencoba launch polling...');
 
+    // [FIX KRITIS] startCron dipanggil SEBELUM launchWithRetry
+    // Masalah: Layer 2-7 (cron, drip, cart abandon, dll) mati total karena
+    // startCron hanya dipanggil di dalam bot.launch().then() yang tidak pernah
+    // resolve ketika 409 loop terjadi.
+    // Fix: cron adalah task independen — harus jalan sejak startup, bukan
+    // bergantung pada polling berhasil. RT Marketing (Layer 1) tetap butuh
+    // bot aktif, tapi cron blast (Layer 2-7) bisa jalan tanpa polling.
+    scheduler.startCron(bot);
+    resumePendingOrders();
+    logger.info('[BOT] Cron marketing dimulai (independen dari polling status)');
+
     // Panggil deleteWebhook sekali lagi tepat sebelum launch
     try {
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     } catch (_) {}
 
     // [FIX 409] Retry loop dengan deleteWebhook + delay 120 detik per attempt
-    // Masalah: delay 60 detik tidak cukup → Telegram slot masih aktif → 409 lagi
-    // Fix: deleteWebhook sebelum setiap retry + tunggu 120 detik
     const launchWithRetry = async (attempt = 1) => {
       try {
         await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
         await bot.launch({ dropPendingUpdates: true });
         logger.success(`Bot Toko Otomatis berjalan! (attempt ${attempt})`);
-        scheduler.startCron(bot);
-        resumePendingOrders();
       } catch (err) {
         if (err.message && err.message.includes('409')) {
           if (attempt >= 5) {
